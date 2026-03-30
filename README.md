@@ -56,6 +56,8 @@ Vor dem Ausführen müssen folgende Variablen im Script angepasst werden:
 ```python
 Quelle = r"A:\2025\PROJEKTNAME\DOP\LV95\..."   # Pfad zu den Quelldaten
 Ziel   = r"\\server\...\BUCKET_INT\RASTER\SB_DOP\2025_PROJEKTNAME_DOP"  # Zielbucket in GDWH
+sowie
+meta_info = (Attribute/ Meta korrekt ausfüllen!)
 ```
 
 ### meta_info
