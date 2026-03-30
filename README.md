@@ -92,7 +92,7 @@ Logs werden automatisch erstellt unter:
 ```
 \\v0t0020a.adr.admin.ch\...\GDWH_STAC_imports\upload_GDWH\scrip_logs\
 ```
-Der Log-Dateiname entspricht dem Zielbucket-Ordnernamen.
+Der Log-Dateiname entspricht dem Zielbucket-Ordnernamen (aka. Name des GDWH Datenpackets).
 
 ---
 
