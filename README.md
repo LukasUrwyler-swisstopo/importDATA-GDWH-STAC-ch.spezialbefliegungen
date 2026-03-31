@@ -85,8 +85,8 @@ meta_info = (Attribut-/ Meta-Informationen korrekt ausfüllen!)
 | GDS | Datenformat | Besonderheiten |
 |-----|------------|----------------|
 | `SB_DOP` | `.tif` / `.tfw` | TileKey aus Dateiname (vor `_LV95`) |
-| `SB_DOP_16` | `.tif` | 16BIT; separate AcquisitionTimes da kein Mosaik aus versch. Linien |
-| `SB_DSM` | `.tif` (DSM + Hillshade) | NoData automatisch; TileKey fix `1000` |
+| `SB_DOP_16` | `.tif` / `.tfw` | 16BIT; separate AcquisitionTimes da kein Mosaik aus versch. Linien |
+| `SB_DSM` | `.tif` / `.tfw` (DSM + Hillshade) | NoData automatisch; TileKey fix `1000` |
 | `SB_DSM_PUNKTWOLKE` | `.laz` | Kein NoData; Kopie in `PrecalculatedFormats` |
 
 ---
