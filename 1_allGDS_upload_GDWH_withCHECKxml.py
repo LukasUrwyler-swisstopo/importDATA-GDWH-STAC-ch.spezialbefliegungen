@@ -204,7 +204,7 @@ def get_nodata_value(filename, GDS, meta_info):
     """
     Gibt den NoData-Wert zurück:
     - SB_DSM + '_hillshade_' im Dateinamen -> immer '255 255 255'
-    - SB_DSM + '_DSM_' im Dateinamen       -> immer '-9999'
+    - SB_DSM + '_DSM_' im Dateinamen       -> immer '-3.4028235e+38'
     - Alle anderen GDS                     -> aus meta_info["NoData"]
     """
     if GDS == "SB_DSM":
@@ -212,7 +212,7 @@ def get_nodata_value(filename, GDS, meta_info):
         if "_hillshade_" in fn_lower:
             return "255 255 255"
         elif "_dsm_" in fn_lower:
-            return "-9999"
+            return "-3.4028235e+38"
     return meta_info.get("NoData", "")
 
 # ****************************** Sicherheits-Check ******************************
@@ -463,8 +463,8 @@ def create_and_copy_order(out, src, GDS):
 
 # ****************************** Working Part ******************************
 
-Quelle = r"A:\2025\GUPPENFIRN\DSM\LV95_LN02\ORIGINAL"
-Ziel = r"\\v0t0020a.adr.admin.ch\iprod\gdwh-ingest\BUCKET_INT\RASTER\SB_DSM\2025_GUPPENFIRN_DSM"
+Quelle = r"A:\2020\RHONE\DSM\LV95_LN02\ORIGINAL"
+Ziel = r"\\v0t0020a.adr.admin.ch\iprod\gdwh-ingest\BUCKET_INT\RASTER\SB_DSM\2020_RHONE_DSM"
         # --> für GDS "SB_DSM_PUNKTWOLKE" Settings beim Datenpacket kontrollieren:
             # beim erstellen des Datenpackets in GDWH, nur folgende Attribute Wählen, Rest leerlassen. 
                 #(Wählen: "Name", "LayerRealeaseKey", "ReleaseModelKey") (leer: "ReleaseKey" und "FullExportFileNameKey")
@@ -486,18 +486,17 @@ meta_info = {
         # "Digital Surface Model  - Raster Mosaic (DSM photogrammetric autocorrelation)" 
         # "Digital Surface Model - PointCloud LAZ (DSM photogrammetric autocorrelation)"
         # "Digital OrthoPhoto - Mosaic RGB 8BIT"
-    "Line_ID": ["20250918_0913_12501", "20250918_0920_12501"], 
+    "Line_ID": ["20200913_1054_12501"], 
         # kontrollieren;
         # (!)Alle LineIDs(!) des Mosaiks angeben! 
         # erste LineID (!)muss(!) die erste BefliegungsLinie (AufnahmeZeitpunkt) des AOIs sein! 
         #(z.B.: "20200821_0952_12504", "20200821_1009_12504", "20200821_1026_12504")
     "NoData": "0 0 0",
         # kontrollieren! Typische Werte:
-        # "0 0 0"       (3-Band RGB TIF)
-        # "0 0 0 0"     (4-Band TIF)
+        # "0 0 0"    /   "255 255 255"   (8BIT, 3-Band RGB TIF)
         # Hinweis: Für GDS "SB_DSM" wird NoData automatisch gesetzt:
         #   - '_hillshade_' im Dateinamen -> "255 255 255"
-        #   - '_DSM_'       im Dateinamen -> "-9999"
+        #   - '_DSM_'       im Dateinamen -> "-3.4028235e+38"
         #   (dieser Wert wird dann ignoriert)
         # Hinweis: Für GDS "SB_DSM_PUNKTWOLKE" gibt es kein NoData-Value		
     "TerrainModel": "Digital Surface Model (DSM photogrammetric autocorrelation)", 
