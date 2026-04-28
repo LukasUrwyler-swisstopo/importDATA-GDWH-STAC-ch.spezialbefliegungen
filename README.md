@@ -70,13 +70,13 @@ meta_info = (Attribut-/ Meta-Informationen korrekt ausfüllen!)
 | `Auftragstyp` | Art des Auftrags | `kry`, `ram`, `bim`, `mom`, `wam` |
 | `Line_ID` | Liste der Befliegungslinien-IDs | `["20250919_0947_12501", ...]` |
 | `allAreaLineIDs` | Alle LineIDs des Mosaiks (nur SB_DOP_16) | `["20250919_0947_12501", ...]` |
-| `NoData` | NoData-Wert des Rasters | `"0 0 0"` (RGB), `"0 0 0 0"` (NRGB 16BIT) |
+| `NoData` | NoData-Wert des Rasters | `"0 0 0"` (RGB), `"0 0 0 0"` (NRGB 16BIT), `-3.4028235e+38` (DSM-raster),`255 255 255` (hillshade)|
 | `CustomAttribute` | Beschreibung des Datenprodukts | `"Digital OrthoPhoto - Mosaic RGB 8BIT"` |
 | `SourceReferenceSystem` | Koordinatensystem | `"(EPSG:2056) CH1903+ / LV95_LN02"` |
 | `CameraSystem` | Kamerasystem | `"Leica ADS100"`, `"Leica DMC-4"` |
 | `TerrainModel` | Verwendetes Geländemodell | `"Digital Surface Model (DSM photogrammetric autocorrelation)"` |
 
-> **Hinweis:** Bei GDS `SB_DSM` wird NoData automatisch gesetzt (`255 255 255` für Hillshade, `-9999` für DSM). Bei `SB_DSM_PUNKTWOLKE` gibt es kein NoData-Value.
+> **Hinweis:** Bei GDS `SB_DSM` wird NoData automatisch gesetzt (`255 255 255` für Hillshade, `-3.4028235e+38` für DSM). Bei GDS `SB_DSM_PUNKTWOLKE` gibt es kein NoData-Value.
 
 ---
 
