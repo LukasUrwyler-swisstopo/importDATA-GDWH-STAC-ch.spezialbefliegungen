@@ -1,18 +1,20 @@
-print("\nVersion 2.4.0 (Remove FlightYear/ResolutionOfOrigin/Provider | Add NoData | AcquisitionTimes mit Hundertstelsekunden)\n")
+print("\nVersion 2.4.2 (Bugfixes: WKT-Polygon, CSV-Leerzeile, GDAL-Handles, src-Parameter, Index-Guards | Stabilität: Log-Cleanup vollständig, Pfadprüfung, makedirs-Timing | Opt: MD5-Chunks 64KB, Fortschrittsanzeige, Traceback-Logging)\n")
 
 import os
 import re
 import hashlib
 import shutil
+import traceback
 from osgeo import gdal
-from datetime import datetime
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import sys
 
 # ****************************** Log-Funktion ******************************
 LOG_DIR = r"\\v0t0020a.adr.admin.ch\prod\topo\tbk\tbkn\BAFUprod\GDWH_STAC_imports\upload_GDWH\scrip_logs"
-os.makedirs(LOG_DIR, exist_ok=True)
+# FIX: os.makedirs wird jetzt erst in files_in_order() aufgerufen –
+#      nicht mehr auf Modul-Ebene, damit ein nicht-erreichbarer UNC-Pfad
+#      nicht sofort beim Scriptstart abbricht (noch vor dem Sicherheits-Check).
 log_file = None
 
 def log(message):
@@ -24,7 +26,8 @@ def log(message):
 def calculate_md5(file_path):
     h = hashlib.md5()
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
+        # FIX/OPT: 64 KB statt 4 KB pro Chunk → ~16× weniger Systemcalls bei grossen TIF/LAZ
+        for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
 
@@ -36,17 +39,21 @@ def define_gds(path):
 def parse_line_id_to_hundredths(line_id):
     """
     Parst eine LineID und gibt (date_str, time_str_with_hundredths) zurück.
-    
+
     Unterstützte Formate im Zeitteil (parts[1]):
         HHMM        -> Sekunden = 00, Hundertstel = 00  -> HH:MM:00.00
         HHMMSS      -> Hundertstel = 00               -> HH:MM:SS.00
         HHMMSSss    -> Hundertstel direkt              -> HH:MM:SS.ss  (2 Stellen Hundertstel)
         HHMMSSsss   -> Millisekunden -> auf Hundertstel runden -> HH:MM:SS.ss
-    
-    Gibt zurück: datetime-Objekt mit Hundertstelsekunden (als float-Attribut .hundredths: int 0-99)
+
+    Gibt zurück: dict mit Schlüsseln year/month/day/hh/mm/ss/hundredths, oder None bei Fehler.
     """
     try:
         parts = line_id.split("_")
+        # FIX: Explizite Prüfung statt blindem IndexError bei fehlendem '_'
+        if len(parts) < 2:
+            log(f"Ungültiges Line_ID Format (mind. ein '_' erwartet): '{line_id}'")
+            return None
         date_str = parts[0]   # z.B. "20230820"
         time_str = parts[1]   # z.B. "0921" oder "092130" oder "09213045" etc.
 
@@ -124,30 +131,39 @@ def wkt_footprint(full_file_path):
     raster = gdal.Open(full_file_path)
     if raster is None:
         return ""
-    gt = raster.GetGeoTransform()
-    cols, rows = raster.RasterXSize, raster.RasterYSize
-    ulx, uly = gdal.ApplyGeoTransform(gt, 0, 0)
-    urx, ury = gdal.ApplyGeoTransform(gt, cols, 0)
-    llx, lly = gdal.ApplyGeoTransform(gt, 0, rows)
-    lrx, lry = gdal.ApplyGeoTransform(gt, cols, rows)
-    return f"POLYGON (({llx} {lly}, {lrx} {lly}, {urx} {ury}, {ulx} {uly}, {llx} {lly}))"
+    try:
+        gt = raster.GetGeoTransform()
+        cols, rows = raster.RasterXSize, raster.RasterYSize
+        ulx, uly = gdal.ApplyGeoTransform(gt, 0, 0)
+        urx, ury = gdal.ApplyGeoTransform(gt, cols, 0)
+        llx, lly = gdal.ApplyGeoTransform(gt, 0, rows)
+        lrx, lry = gdal.ApplyGeoTransform(gt, cols, rows)
+        # FIX: Punkt 2 war '{lrx} {lly}' — Y-Koordinate wurde falsch gemischt.
+        #      Korrekt: '{lrx} {lry}'. Bei achsen-parallelen LV95-Rastern ist
+        #      lly==lry, daher war bisher kein sichtbares Symptom vorhanden.
+        return f"POLYGON (({llx} {lly}, {lrx} {lry}, {urx} {ury}, {ulx} {uly}, {llx} {lly}))"
+    finally:
+        raster = None  # FIX: GDAL-Handle explizit freigeben (war vorher offen gelassen)
 
 def get_raster_attributes(file_path):
     raster = gdal.Open(file_path)
     if raster is None:
         raise FileNotFoundError(f"Konnte Raster nicht öffnen: {file_path}")
-    gt = raster.GetGeoTransform()
-    band = raster.GetRasterBand(1)
-    px, py = abs(gt[1]), abs(gt[5])
-    cols, rows = raster.RasterXSize, raster.RasterYSize
-    bx, by = band.GetBlockSize()
-    return {
-        "CellSize": f"{(px+py)/2}",
-        "BlockSizeX": str(bx),
-        "BlockSizeY": str(by),
-        "CellCountWidth": str(cols),
-        "CellCountHeight": str(rows)
-    }
+    try:
+        gt = raster.GetGeoTransform()
+        band = raster.GetRasterBand(1)
+        px, py = abs(gt[1]), abs(gt[5])
+        cols, rows = raster.RasterXSize, raster.RasterYSize
+        bx, by = band.GetBlockSize()
+        return {
+            "CellSize": f"{(px+py)/2}",
+            "BlockSizeX": str(bx),
+            "BlockSizeY": str(by),
+            "CellCountWidth": str(cols),
+            "CellCountHeight": str(rows)
+        }
+    finally:
+        raster = None  # FIX: GDAL-Handle explizit freigeben (war vorher offen gelassen)
 
 def extract_area(filename, GDS):
     """
@@ -195,6 +211,10 @@ def extract_tile_lv95(filename):
     parts = base.split('_')
     try:
         lv95_idx = parts.index('LV95')
+        # FIX: Negativer Index-Zugriff würde silently falsches Ergebnis liefern.
+        #      Explizite Prüfung verhindert das.
+        if lv95_idx < 2:
+            raise ValueError(f"'LV95' steht an Position {lv95_idx}, mind. 2 Parts davor nötig")
         return parts[lv95_idx - 2] + "_" + parts[lv95_idx - 1]
     except (ValueError, IndexError) as e:
         log(f"Fehler beim Extrahieren des TileKey aus '{filename}': {e}")
@@ -245,7 +265,11 @@ def preview_xml_attributes(src, GDS, meta_info):
         _parts = example_file.rsplit('.', 1)[0].split('_')
         if "LV95" in _parts:
             _idx = _parts.index("LV95")
-            example_tilekey = _parts[_idx - 2] + "_" + _parts[_idx - 1]
+            # FIX: gleicher Index-Guard wie in extract_tile_lv95 und update_file_csv
+            if _idx >= 2:
+                example_tilekey = _parts[_idx - 2] + "_" + _parts[_idx - 1]
+            else:
+                example_tilekey = f"FEHLER – 'LV95' steht zu früh (Position {_idx})"
         else:
             example_tilekey = "NICHT GEFUNDEN – 'LV95' fehlt im Dateinamen!"
     elif GDS == "SB_DSM":
@@ -254,12 +278,13 @@ def preview_xml_attributes(src, GDS, meta_info):
         _parts = example_file.rsplit('.', 1)[0].split('_')
         example_tilekey = _parts[-2] + "_" + _parts[-1] if len(_parts) >= 2 else "UNBEKANNT"
 
-    print("CHECK-ref.SYS.; ReferenzSystem OK?: ", Quelle)
+    # FIX: Funktions-Parameter 'src' verwenden statt globale Variable 'Quelle'
+    print("CHECK-ref.SYS.; ReferenzSystem OK?: ", src)
     print(meta_info.get("Auftragstyp", ""))
     print(AOI)
     print(f"TileKey (Beispiel aus '{example_file}'): {example_tilekey}")
-    print(meta_info.get("CustomAttribute", ""))    
-    print(meta_info.get("CameraSystem", ""))    
+    print(meta_info.get("CustomAttribute", ""))
+    print(meta_info.get("CameraSystem", ""))
     print(meta_info.get("SourceReferenceSystem", ""))
     print(meta_info.get("TerrainModel", ""))
     if GDS != "SB_DSM_PUNKTWOLKE":
@@ -269,9 +294,6 @@ def preview_xml_attributes(src, GDS, meta_info):
 
     line_ids = meta_info.get("Line_ID", [])
     print(",".join(line_ids))
-
-    acq_times = [format_first_acquisition(l) for l in line_ids]
-    # print(",".join(acq_times))
 
     if line_ids:
         print(format_first_acquisition(line_ids[0]))
@@ -347,6 +369,17 @@ def create_xml(file_path, GDS, meta_info):
     return xml_path, AOI, first_time
 
 # ****************************** CSV & Kopieren ******************************
+def _csv_append(csv_path, row):
+    """
+    Hängt eine Zeile an die CSV-Datei an.
+    FIX: Kein führendes '\\n' bei einer neuen/leeren Datei (war: jeder Eintrag
+         begann mit '\\n', was bei einer neuen Datei eine Leerzeile erzeugte).
+    CSV-Zeileninhalt (row) bleibt identisch.
+    """
+    file_exists_with_content = os.path.isfile(csv_path) and os.path.getsize(csv_path) > 0
+    with open(csv_path, 'a', encoding='utf-8') as f:
+        f.write(("\n" if file_exists_with_content else "") + row)
+
 def update_file_csv(output_path, full_file_path, GDS):
     csv_path = os.path.join(output_path, 'files.csv')
     name = os.path.basename(full_file_path)
@@ -361,7 +394,8 @@ def update_file_csv(output_path, full_file_path, GDS):
         for fext in [ext, ".xml", ".tfw"]:
             src = full_file_path.rsplit('.', 1)[0] + fext
             if os.path.exists(src):
-                shutil.copy(src, os.path.join(dst_folder, os.path.basename(src)))
+                # OPT: copy2 statt copy → Datei-Timestamps bleiben erhalten
+                shutil.copy2(src, os.path.join(dst_folder, os.path.basename(src)))
         md5 = calculate_md5(full_file_path)
         tilekey = "1000"
         row = f"NV\\{subfolder}\\{name};{md5};{tilekey};add;{wkt_footprint(full_file_path)}"
@@ -375,24 +409,23 @@ def update_file_csv(output_path, full_file_path, GDS):
         # Hauptziel: NV\SB_DSM_PUNKTWOLKE
         dst_nv = os.path.join(output_path, "NV", "SB_DSM_PUNKTWOLKE")
         os.makedirs(dst_nv, exist_ok=True)
-        shutil.copy(full_file_path, os.path.join(dst_nv, name))
+        shutil.copy2(full_file_path, os.path.join(dst_nv, name))
 
         xml_src = full_file_path.rsplit('.', 1)[0] + ".xml"
         if os.path.exists(xml_src):
-            shutil.copy(xml_src, os.path.join(dst_nv, os.path.basename(xml_src)))
+            shutil.copy2(xml_src, os.path.join(dst_nv, os.path.basename(xml_src)))
 
         # Zweites Ziel: PrecalculatedFormats\SB_DSM_PUNKTWOLKE
         dst_pre = os.path.join(output_path, "PrecalculatedFormats", "SB_DSM_PUNKTWOLKE")
         os.makedirs(dst_pre, exist_ok=True)
         new_name = f"SB_DSM_PUNKTWOLKE_LAZ_CHLV95_LN02_{tilekey}.laz"
-        shutil.copy(full_file_path, os.path.join(dst_pre, new_name))
+        shutil.copy2(full_file_path, os.path.join(dst_pre, new_name))
 
         row_nv  = f"NV\\SB_DSM_PUNKTWOLKE\\{name};{md5};{tilekey};add;"
         row_pre = f"PrecalculatedFormats\\SB_DSM_PUNKTWOLKE\\{new_name};{md5};{tilekey};add;"
 
-        with open(csv_path, 'a', encoding='utf-8') as f:
-            f.write("\n" + row_nv)
-            f.write("\n" + row_pre)
+        _csv_append(csv_path, row_nv)
+        _csv_append(csv_path, row_pre)
         return  # fertig für diesen Datentyp
 
     # === SB_DOP / SB_DOP_16 ===
@@ -400,6 +433,9 @@ def update_file_csv(output_path, full_file_path, GDS):
         # TileKey: die zwei Parts direkt vor '_LV95' (robust, von hinten)
         if "LV95" in name_parts:
             lv95_index = name_parts.index("LV95")
+            # FIX: Negativer Index-Zugriff würde silently falsches Ergebnis liefern
+            if lv95_index < 2:
+                raise ValueError(f"'LV95' steht zu früh im Dateinamen (Position {lv95_index}): {name}")
             tile = name_parts[lv95_index - 2] + "_" + name_parts[lv95_index - 1]
         else:
             raise ValueError(f"LV95 nicht im Dateinamen gefunden: {name}")
@@ -411,7 +447,7 @@ def update_file_csv(output_path, full_file_path, GDS):
         if os.path.exists(xml_src):
             nv_path = os.path.join(output_path, "NV")
             os.makedirs(nv_path, exist_ok=True)
-            shutil.copy(xml_src, os.path.join(nv_path, os.path.basename(xml_src)))
+            shutil.copy2(xml_src, os.path.join(nv_path, os.path.basename(xml_src)))
 
     # === Default ===
     else:
@@ -419,29 +455,40 @@ def update_file_csv(output_path, full_file_path, GDS):
         md5 = calculate_md5(full_file_path)
         row = f"NV\\{name};{md5};{tile};add;"
 
-    with open(csv_path, 'a', encoding='utf-8') as f:
-        f.write("\n" + row)
+    _csv_append(csv_path, row)
 
 # ****************************** Hauptlogik ******************************
 def files_in_order(src, out, GDS, meta):
     global log_file
     missing_xml = []
 
+    # FIX: os.makedirs hier statt auf Modul-Ebene → UNC-Pfad wird erst beim
+    #      tatsächlichen Start geprüft, nicht schon beim Import/Scriptstart
+    os.makedirs(LOG_DIR, exist_ok=True)
+
     log_name = os.path.basename(out.rstrip("/\\")) + ".log"
     log_path = os.path.join(LOG_DIR, log_name)
     log_file = open(log_path, 'w', encoding='utf-8')
     log(f"Log-Datei: {log_path}")
 
-    for fn in os.listdir(src):
+    # OPT: Dateien zuerst sammeln → ermöglicht Fortschrittsanzeige [i/n]
+    files = [
+        fn for fn in os.listdir(src)
+        if os.path.isfile(os.path.join(src, fn))
+        and fn.lower().endswith(('.tif', '.tiff', '.laz'))
+    ]
+
+    for i, fn in enumerate(files, 1):
         fp = os.path.join(src, fn)
-        if os.path.isfile(fp) and fn.lower().endswith(('.tif', '.tiff', '.laz')):
-            log(f"Verarbeite: {fn}")
-            try:
-                xml_path, _, _ = create_xml(fp, GDS, meta)
-                update_file_csv(out, fp, GDS)
-            except Exception as e:
-                log(f"Fehler bei {fn}: {e}")
-                missing_xml.append(fn)
+        log(f"[{i}/{len(files)}] Verarbeite: {fn}")
+        try:
+            create_xml(fp, GDS, meta)
+            update_file_csv(out, fp, GDS)
+        except Exception as e:
+            # OPT: Vollständiger Traceback im Log für einfacheres Debugging
+            log(f"Fehler bei {fn}: {e}")
+            log(traceback.format_exc())
+            missing_xml.append(fn)
 
     if missing_xml:
         log("Fehler: Einige XML wurden nicht erstellt:")
@@ -450,6 +497,8 @@ def files_in_order(src, out, GDS, meta):
         sys.exit(1)
     else:
         log("Alle XML-Dateien erfolgreich erstellt und kopiert.\n")
+    # Log-Datei bleibt offen – wird auf Script-Ebene im finally-Block geschlossen,
+    # damit auch der nachfolgende create_and_copy_order-Aufruf noch ins Log schreibt.
 
 # ****************************** DOP-Kopieren ******************************
 def create_and_copy_order(out, src, GDS):
@@ -458,70 +507,86 @@ def create_and_copy_order(out, src, GDS):
         os.makedirs(nv_path, exist_ok=True)
         for fn in os.listdir(src):
             if fn.lower().endswith(('.tif', '.tfw')):
-                shutil.copy(os.path.join(src, fn), os.path.join(nv_path, fn))
+                # OPT: copy2 statt copy → Datei-Timestamps bleiben erhalten
+                shutil.copy2(os.path.join(src, fn), os.path.join(nv_path, fn))
         log("DOP-Dateien kopiert.\n")
 
 # ****************************** Working Part ******************************
+# Wird nur ausgeführt wenn das Script direkt gestartet wird (nicht bei Import).
+# Beim Start via GUI (0_main_GDWH_import_GUI.py) werden Pfade und meta_info
+# als Subprocess-Config übergeben und die Funktionen direkt aufgerufen.
 
-Quelle = r"A:\20XX\AOI\DSM\LV95_LN02\ORIGINAL"
-Ziel = r"\\v0t0020a.adr.admin.ch\iprod\gdwh-ingest\BUCKET_INT\RASTER\SB_DSM\20XX_AOI_DSM"
-        # --> für GDS "SB_DSM_PUNKTWOLKE" Settings beim Datenpacket kontrollieren:
-            # beim erstellen des Datenpackets in GDWH, nur folgende Attribute Wählen, Rest leerlassen. 
-                #(Wählen: "Name", "LayerRealeaseKey", "ReleaseModelKey") (leer: "ReleaseKey" und "FullExportFileNameKey")
+if __name__ == "__main__":
 
-GDS = define_gds(Ziel)
+    Quelle = r"A:\20XX\AOI\DSM\LV95_LN02\ORIGINAL"
+    Ziel = r"\\v0t0020a.adr.admin.ch\iprod\gdwh-ingest\BUCKET_INT\RASTER\SB_DSM\20XX_AOI_DSM"
+            # --> für GDS "SB_DSM_PUNKTWOLKE" Settings beim Datenpacket kontrollieren:
+                # beim erstellen des Datenpackets in GDWH, nur folgende Attribute Wählen, Rest leerlassen.
+                    #(Wählen: "Name", "LayerRealeaseKey", "ReleaseModelKey") (leer: "ReleaseKey" und "FullExportFileNameKey")
 
-# *********************** Meta-Information *******************************
+    GDS = define_gds(Ziel)
 
-meta_info = {
-    "Auftragstyp": "kry", 
-        # kontrollieren:
-        # "kry"
-        # "ram"
-        # "bim"
-        # "mom"
-        # "wam"
-    "CustomAttribute": "Digital Surface Model  - Raster Mosaic (DSM photogrammetric autocorrelation)" , 
-        # kontrollieren; 
-        # "Digital Surface Model  - Raster Mosaic (DSM photogrammetric autocorrelation)" 
-        # "Digital Surface Model - PointCloud LAZ (DSM photogrammetric autocorrelation)"
-        # "Digital OrthoPhoto - Mosaic RGB 8BIT"
-    "Line_ID": ["20200913_1054_12501", "20200913_1104_12501"], 
-        # kontrollieren;
-        # (!)Alle LineIDs(!) des Mosaiks angeben! 
-        # erste LineID (!)muss(!) die erste BefliegungsLinie (AufnahmeZeitpunkt) des AOIs sein! 
-        #(z.B.: "20200821_0952_12504", "20200821_1009_12504", "20200821_1026_12504")
-    "NoData": "0 0 0",
-        # kontrollieren! Typische Werte:
-        # "0 0 0"    /   "255 255 255"   (8BIT, 3-Band RGB TIF)
-        # Hinweis: Für GDS "SB_DSM" wird NoData automatisch gesetzt:
-        #   - '_hillshade_' im Dateinamen -> "255 255 255"
-        #   - '_DSM_'       im Dateinamen -> "-3.4028235e+38"
-        #   (dieser Wert wird dann ignoriert)
-        # Hinweis: Für GDS "SB_DSM_PUNKTWOLKE" gibt es kein NoData-Value		
-    "TerrainModel": "Digital Surface Model (DSM photogrammetric autocorrelation)", 
-        # kontrollieren;
-        # "Digital Surface Model (DSM photogrammetric autocorrelation)"
-        # "swissALTI3D"
-        # "swissALTI3D/DHM25"
-        # "swissSURFACE3D"
-    "SourceReferenceSystem": "(EPSG:2056) CH1903+ / LV95_LN02", 
-        # INPUT kontrollieren! only possible Value:
-        # ("EPSG:2056) CH1903+ / LV95_LN02"
-    "CameraSystem": "Leica ADS100", 
-        # kontrollieren;
-        # "Leica ADS100"
-        # "Leica ADS80"
-        # "Leica DMC-4"
-}
+    # *********************** Meta-Information *******************************
 
-# ======================================================================
+    meta_info = {
+        "Auftragstyp": "kry",
+            # kontrollieren:
+            # "kry"
+            # "ram"
+            # "bim"
+            # "mom"
+            # "wam"
+        "CustomAttribute": "Digital Surface Model  - Raster Mosaic (DSM photogrammetric autocorrelation)" ,
+            # kontrollieren;
+            # "Digital Surface Model  - Raster Mosaic (DSM photogrammetric autocorrelation)"
+            # "Digital Surface Model - PointCloud LAZ (DSM photogrammetric autocorrelation)"
+            # "Digital OrthoPhoto - Mosaic RGB 8BIT"
+        "Line_ID": ["20200913_1054_12501", "20200913_1104_12501"],
+            # kontrollieren;
+            # (!)Alle LineIDs(!) des Mosaiks angeben!
+            # erste LineID (!)muss(!) die erste BefliegungsLinie (AufnahmeZeitpunkt) des AOIs sein!
+            #(z.B.: "20200821_0952_12504", "20200821_1009_12504", "20200821_1026_12504")
+        "NoData": "0 0 0",
+            # kontrollieren! Typische Werte:
+            # "0 0 0"    /   "255 255 255"   (8BIT, 3-Band RGB TIF)
+            # Hinweis: Für GDS "SB_DSM" wird NoData automatisch gesetzt:
+            #   - '_hillshade_' im Dateinamen -> "255 255 255"
+            #   - '_DSM_'       im Dateinamen -> "-3.4028235e+38"
+            #   (dieser Wert wird dann ignoriert)
+            # Hinweis: Für GDS "SB_DSM_PUNKTWOLKE" gibt es kein NoData-Value
+        "TerrainModel": "Digital Surface Model (DSM photogrammetric autocorrelation)",
+            # kontrollieren;
+            # "Digital Surface Model (DSM photogrammetric autocorrelation)"
+            # "swissALTI3D"
+            # "swissALTI3D/DHM25"
+            # "swissSURFACE3D"
+        "SourceReferenceSystem": "(EPSG:2056) CH1903+ / LV95_LN02",
+            # INPUT kontrollieren! only possible Value:
+            # ("EPSG:2056) CH1903+ / LV95_LN02"
+        "CameraSystem": "Leica ADS100",
+            # kontrollieren;
+            # "Leica ADS100"
+            # "Leica ADS80"
+            # "Leica DMC-4"
+    }
 
-# Sicherheitsvorschau anzeigen
-preview_xml_attributes(Quelle, GDS, meta_info)
-# Processierung wenn YES
-files_in_order(Quelle, Ziel, GDS, meta_info)
-create_and_copy_order(Ziel, Quelle, GDS)
+    # ======================================================================
 
-if log_file:
-    log_file.close()
+    # FIX: Pfad-Validierung vor Start → klare Fehlermeldung statt kryptischem Crash
+    if not os.path.isdir(Quelle):
+        sys.exit(f"\nFEHLER: Quellordner nicht gefunden:\n  {Quelle}\n")
+
+    # Sicherheitsvorschau anzeigen
+    preview_xml_attributes(Quelle, GDS, meta_info)
+
+    # Processierung wenn YES
+    # FIX: try/finally auf Script-Ebene → Log-Datei wird garantiert geschlossen,
+    #      auch wenn sys.exit() oder eine unerwartete Exception auftritt.
+    #      create_and_copy_order läuft innerhalb des try-Blocks, damit sein
+    #      "DOP-Dateien kopiert"-Log ebenfalls in die Datei geschrieben wird.
+    try:
+        files_in_order(Quelle, Ziel, GDS, meta_info)
+        create_and_copy_order(Ziel, Quelle, GDS)
+    finally:
+        if log_file:
+            log_file.close()

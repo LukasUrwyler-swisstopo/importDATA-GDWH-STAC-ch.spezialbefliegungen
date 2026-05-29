@@ -1,109 +1,149 @@
 # GDWH & STAC Import Pipeline
 
-Python-Script zur automatisierten XML-Generierung, Datenvalidierung und Import-Pipeline nach GDWH und STAC.
+Python-Scripts zur automatisierten XML-Generierung, Datenvalidierung und Import-Pipeline nach GDWH und STAC.
+
+---
+
+## Starten
+
+### Empfohlen: GUI
+
+```
+python 0_main_GDWH_import_GUI.py
+```
+
+Tkinter-Oberfläche – alle Felder werden interaktiv ausgefüllt, kein manuelles Script-Editieren nötig.
 
 ---
 
 ## Beschreibung
 
-Diese Scripts automatisieren den gesamten Prozess von der Datenvorbereitung bis zur Integration in STAC. Je nach GDS und Datenformat werden XML-Metadaten generiert, Daten ins korrekte GDWH-Bucket kopiert und nach erfolgreicher Validierung automatisiert nach STAC importiert.
+Die Scripts automatisieren den gesamten Prozess von der Datenvorbereitung bis zur Integration in STAC. Je nach GDS und Datenformat werden XML-Metadaten generiert, Daten ins korrekte GDWH-Bucket kopiert und nach erfolgreicher Validierung automatisiert nach STAC importiert.
 
-### Verfügbare Scripts
+### Script-Übersicht
 
-| Script | Verwendung |
-|--------|------------|
-| `1_allGDS_upload_GDWH_withCHECKxml.py` | Universalscript für folgende GDS-Typen (SB_DOP, SB_DSM, SB_DSM_PUNKTWOLKE) |
-| `2_1_SB_DOP_16_FOLDERorganize_by_lineID.py` | Vorbereitung für das "2_2_SB_DOP_16..."-Script; Organisiert und verschiebt die 16BIT Daten im Quell-Pfad, in einzelne Import-Ordner (nach Aufnahmezeitpunkt) |
-| `2_2_SB_DOP_16_GDS_upload_GDWH_withCHECKxml.py` | Spezialisiert für GDS `SB_DOP_16` (SB_DOP_16) |
+| Script | Rolle | Direkt ausführbar |
+|--------|-------|:-----------------:|
+| `0_main_GDWH_import_GUI.py` | **Hauptscript (GUI)** – steuert alle Sub-Scripts über eine Tkinter-Oberfläche | ✓ (normales Python) |
+| `1_allGDS_upload_GDWH_withCHECKxml.py` | Sub-Script für `SB_DOP`, `SB_DSM`, `SB_DSM_PUNKTWOLKE` | (direkt möglich, Working Part anpassen) |
+| `2_1_SB_DOP_16_FOLDERorganize_by_lineID.py` | Sub-Script – organisiert 16BIT-DOP-Dateien nach LineID in Unterordner | (direkt möglich, Pfad anpassen) |
+| `2_2_SB_DOP_16_GDS_upload_GDWH_withCHECKxml.py` | Sub-Script für `SB_DOP_16` | (direkt möglich, Working Part anpassen) |
+| `_osgeo_runner.py` | **Interner Subprocess-Runner** – wird von der GUI via OSGeo4W Python aufgerufen; nicht direkt starten | – |
+
+> Alle Scripts müssen **im selben Ordner** liegen. `_gdwh_config.json` wird beim ersten Start der GUI automatisch erstellt und speichert den OSGeo4W Python-Pfad.
 
 ---
 
 ## Ablauf
 
-1. **GDWH-Datenpacket** – im GDWH Portal (swisstopo) ein Datenpaket für jedes GDS erstellen, Bucket-Pfad kopieren.
-2. **edit-pyScript** – Bucket-Pfad, Quell-Pfad und Meta-Informationen im Script entsprechend anpassen, Script mit osgeo4shell/python  ausführen:
-3. **Script** - Script enthält folgende Funktionen:
-   - Sicherheits-Check – Vorschau der XML-Attribute anhand einer Beispieldatei; Benutzer bestätigt mit `Y/N`
-   - XML-Generierung – Für jede `.tif`/`.tiff`/`.laz`-Datei wird ein XML mit Metadaten erstellt (abhängig von GDS und Dateiname)
-   - Daten ins Bucket kopieren – Dateien und XMLs werden in das korrekte GDWH-Bucket (NV-Ordner) kopiert; bei `SB_DSM_PUNKTWOLKE` zusätzlich in `PrecalculatedFormats`
-   - files.csv erstellen – Pro Datei wird ein Eintrag mit MD5-Hash, TileKey und WKT-Footprint in `files.csv` geschrieben
-4. **GDWH-CHECK** – Im GDWH- Portal wird mit `CHECK` werden die bereitgestellten Daten des Datenpackets geprüft.
-5. **Import nach GDWH** – Nach erfolgreichem Check/Validierung, werden die Daten in GDWH importiert
-   - Integration nach STAC – Die importierten Daten werden automatisiert in STAC integriert
+```
+GDWH-Datenpacket erstellen (Portal)
+        │
+        ▼
+Hauptscript starten  (GUI)
+        │
+        ├─ GDS wählen
+        ├─ Meta-Informationen eingeben  (Dropdown / Auswahl)
+        ├─ Pfade eingeben  (Quelle / Ziel)
+        │
+        ├─ [SB_DOP_16 only]  Script 2_1: Dateien nach LineID in Unterordner sortieren
+        │
+        ├─ Sicherheitscheck  (Dialog: Metadaten, Pfade, CRS-Prüfung bestätigen)
+        │
+        ├─ XML-Generierung  (pro .tif / .laz)
+        ├─ Daten ins Bucket kopieren  (NV-Ordner; PUNKTWOLKE: +PrecalculatedFormats)
+        └─ files.csv erstellen  (MD5-Hash, TileKey, WKT-Footprint)
+                │
+                ▼
+        GDWH CHECK  (Portal: Datenpaket prüfen)
+                │
+                ▼
+        GDWH Import  →  STAC-Integration (automatisch)
+```
+
+### GDS-Routing
+
+| GDS | Sub-Scripts |
+|-----|-------------|
+| `SB_DOP` | Script 1 |
+| `SB_DOP_16` | Script 2_1 → Script 2_2 |
+| `SB_DSM` | Script 1 |
+| `SB_DSM_PUNKTWOLKE` | Script 1 |
 
 ---
 
 ## Voraussetzungen
 
-- Python 3.x
-- **GDAL** (`osgeo`) via OSGeo4Shell
-- Zugriff auf GDWH-Bucket (`\\v0t0020a.adr.admin.ch\...\BUCKET_INT\...`)
-- Zugriff auf Log-Verzeichnis (`\\v0t0020a.adr.admin.ch\...\scrip_logs`)
+- **normales Python 3.x** – kein OSGeo4W-Start nötig
+  - Die GUI erkennt den OSGeo4W Python-Pfad automatisch (OSGeo4W, QGIS-Installation)
+  - Pfad kann über den Button **Ändern…** im GUI manuell gesetzt und wird in `_gdwh_config.json` gespeichert
+  - GDAL-abhängige Sub-Scripts (1 und 2_2) werden intern als Subprocess im OSGeo4W Python ausgeführt
+- **tkinter** (in Python-Standardbibliothek enthalten)
+- Netzwerkzugriff auf GDWH-Bucket (`\\v0t0020a.adr.admin.ch\...\BUCKET_INT\...`)
+- Netzwerkzugriff auf Log-Verzeichnis (`\\v0t0020a.adr.admin.ch\...\scrip_logs`)
 - **Korrektes Dateinamen-Format** (wird für XML-Generierung zwingend benötigt):
 
-| GDS | Dateinamen-Format (Beispiel) |
-|-----|-----------------------------|
+| GDS | Dateinamen-Format |
+|-----|-------------------|
 | `SB_DOP` | `202X_AREANAME_DOP_..._XXXX_YYYY_LV95.tif` / `.tfw` |
 | `SB_DOP_16` | `202X_AREANAME_DOP_..._XXXX_YYYY_LV95.tif` / `.tfw` |
-| `SB_DSM` | `202X_AREANAME_DSM_..._LV95_LN02.tif` / `.tfw` / `202X_AREANAME_hillshade_..._LV95_LN02.tif` / `.tfw` |
+| `SB_DSM` | `202X_AREANAME_DSM_..._LV95_LN02.tif` / `.tfw`  und/oder  `202X_AREANAME_hillshade_..._LV95_LN02.tif` |
 | `SB_DSM_PUNKTWOLKE` | `202X_AREANAME_TIN_..._XXXX_YYYY_LV95_LN02.laz` |
 
-> `XXXX_YYYY` entspricht dem TileKey (z.B. `2601_1136`). `_LV95` muss im Dateinamen vorhanden sein (was danach folgt, z.B. `_LN02`, ist für das Script irrelevant).
+> `XXXX_YYYY` = TileKey (z.B. `2601_1136`). `_LV95` muss im Dateinamen vorhanden sein.
 
 ---
 
-## Konfiguration (Working Part im Script)
+## Meta-Informationen
 
-Vor dem Ausführen müssen folgende Variablen im Script angepasst werden:
+Alle Meta-Informationen werden **interaktiv** über das Haupt-Script eingegeben – kein manuelles Editieren der Sub-Scripts nötig.
 
-```python
-Quelle = r"A:\2025\PROJEKTNAME\DOP\LV95\..."   # Pfad zu den Quelldaten
-Ziel   = r"\\server\...\BUCKET_INT\RASTER\SB_DOP\2025_PROJEKTNAME_DOP"  # Zielbucket in GDWH
-sowie
-meta_info = (Attribut-/ Meta-Informationen korrekt ausfüllen!)
-```
-
-### meta_info
-
-| Parameter | Beschreibung | Typische Werte |
+| Parameter | Beschreibung | Mögliche Werte |
 |-----------|-------------|----------------|
-| `Auftragstyp` | Art des Auftrags | `kry`, `ram`, `bim`, `mom`, `wam` |
-| `Line_ID` | Liste der Befliegungslinien-IDs | `["20250919_0947_12501", ...]` |
-| `allAreaLineIDs` | Alle LineIDs des Mosaiks (nur SB_DOP_16) | `["20250919_0947_12501", ...]` |
-| `NoData` | NoData-Wert des Rasters | `"0 0 0"` oder `"255 255 255"` (RGB), `"0 0 0 0"` oder `"65535 65535 65535 65535"` (NRGB 16BIT), `-3.4028235e+38` (DSM-raster),`255 255 255` (hillshade)|
-| `CustomAttribute` | Beschreibung des Datenprodukts | `"Digital OrthoPhoto - Mosaic RGB 8BIT"` |
-| `SourceReferenceSystem` | Koordinatensystem | `"(EPSG:2056) CH1903+ / LV95_LN02"` |
-| `CameraSystem` | Kamerasystem | `"Leica ADS100"`, `"Leica DMC-4"` |
-| `TerrainModel` | Verwendetes Geländemodell | `"Digital Surface Model (DSM photogrammetric autocorrelation)"` |
+| `Auftragstyp` | Art des Auftrags | `kry` / `ram` / `bim` / `mom` / `wam` |
+| `CustomAttribute` | Beschreibung des Datenprodukts | siehe Auswahlliste |
+| `Line_ID` | Befliegungslinien-IDs | `["YYYYMMDD_HHMM_QQQQQ", ...]` – erste ID = frühste Linie |
+| `allAreaLineIDs` | Alle LineIDs des Gebiets *(nur SB_DOP_16)* | `["YYYYMMDD_HHMM_QQQQQ", ...]` |
+| `NoData` | NoData-Wert | `"0 0 0"` / `"255 255 255"` (8BIT RGB) · `"0 0 0 0"` / `"65535 65535 65535 65535"` (16BIT NRGB) |
+| `TerrainModel` | Verwendetes Geländemodell | siehe Auswahlliste |
+| `SourceReferenceSystem` | Koordinatensystem | `"(EPSG:2056) CH1903+ / LV95_LN02"` *(fix)* |
+| `CameraSystem` | Kamerasystem | `"Leica ADS100"` / `"Leica ADS80"` / `"Leica DMC-4"` |
 
-> **Hinweis:** Bei GDS `SB_DSM` wird NoData automatisch gesetzt (`255 255 255` für Hillshade, `-3.4028235e+38` für DSM). Bei GDS `SB_DSM_PUNKTWOLKE` gibt es kein NoData-Value.
+> **SB_DSM:** NoData wird automatisch gesetzt (`"255 255 255"` für Hillshade, `"-3.4028235e+38"` für DSM-Raster).
+> **SB_DSM_PUNKTWOLKE:** kein NoData-Value.
 
 ---
 
 ## Unterstützte GDS-Typen
 
 | GDS | Datenformat | Besonderheiten |
-|-----|------------|----------------|
-| `SB_DOP` | `.tif` / `.tfw` | TileKey aus Dateiname (vor `_LV95`) |
-| `SB_DOP_16` | `.tif` / `.tfw` | 16BIT; separate AcquisitionTimes da kein Mosaik aus versch. Linien |
-| `SB_DSM` | `.tif` / `.tfw` (DSM + Hillshade) | NoData automatisch; TileKey fix `1000` |
-| `SB_DSM_PUNKTWOLKE` | `.laz` | Kein NoData; Kopie in `PrecalculatedFormats` |
+|-----|-------------|----------------|
+| `SB_DOP` | `.tif` / `.tfw` | TileKey aus Dateiname (zwei Parts vor `_LV95`) |
+| `SB_DOP_16` | `.tif` / `.tfw` | 16BIT NRGB; Dateien werden vor Import nach LineID in Unterordner sortiert |
+| `SB_DSM` | `.tif` / `.tfw` (DSM + Hillshade) | NoData automatisch per Dateiname; TileKey fix `1000` |
+| `SB_DSM_PUNKTWOLKE` | `.laz` | Kein NoData; Kopie in `PrecalculatedFormats\SB_DSM_PUNKTWOLKE` |
 
 ---
 
 ## Log
 
-Logs werden automatisch erstellt unter:
+Die GUI schreibt bei jedem Import eine Logdatei in den Ordner `logs\` neben dem Script:
 ```
-\\v0t0020a.adr.admin.ch\...\GDWH_STAC_imports\upload_GDWH\scrip_logs\
+logs\GDWH_{GDS}_{YYYYMMDD_HHMMSS}.log
 ```
-Der Log-Dateiname entspricht dem Zielbucket-Ordnernamen (aka. Name des GDWH Datenpackets).
+Der Ordner wird beim ersten Import automatisch erstellt.
+Die Sub-Scripts schreiben zusätzlich in den zentralen Netzwerk-Log:
+```
+\\...adr.admin.ch\...\GDWH_STAC_imports\upload_GDWH\scrip_logs\
+```
 
 ---
 
 ## Hinweise
 
-- Der Sicherheits-Check muss mit `Y` bestätigt werden, sonst bricht das Script ab
-- Die erste `Line_ID` **muss** die erste Befliegungslinie (frühester Aufnahmezeitpunkt) des AOIs sein
+- Die erste `Line_ID` **muss** die frühste Befliegungslinie (frühester Aufnahmezeitpunkt) des AOIs sein
+- **Mehrere LineIDs auf einmal eingeben**: Spalte in Excel markieren → Ctrl+C → ins LineID-Feld klicken → Ctrl+V (jede Zeile wird einzeln validiert)
+- Zielpfad muss den GDS-Namen als vorletzten Ordner enthalten (z.B. `…\SB_DSM\2025_AREA_DSM`) – das Haupt-Script warnt bei Abweichung
+- Bei `SB_DOP_16`: Script 2_1 kann übersprungen werden, falls Unterordner bereits existieren
 - Die Validierung via `GDWH/CHECK` muss erfolgreich abgeschlossen sein, bevor der Import gestartet wird
 - Der STAC-Import erfolgt automatisch nach erfolgreichem GDWH-Import

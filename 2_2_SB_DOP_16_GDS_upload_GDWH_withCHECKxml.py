@@ -6,47 +6,58 @@ import xml.etree.ElementTree as ET
 import hashlib
 import shutil
 from osgeo import gdal
-from datetime import datetime
 from xml.dom import minidom
 import sys
+
+gdal.UseExceptions()  # FIX: GDAL-Fehler als Python-Exceptions statt stille None-Rückgabe
 
 # ****************************** Log-Funktion ******************************
 
 LOG_DIR = r"\\v0t0020a.adr.admin.ch\prod\topo\tbk\tbkn\BAFUprod\GDWH_STAC_imports\upload_GDWH\scrip_logs"
-os.makedirs(LOG_DIR, exist_ok=True)
+# os.makedirs wird erst in files_in_order() aufgerufen –
+# nicht auf Modul-Ebene, damit ein nicht-erreichbarer UNC-Pfad
+# den Import nicht sofort abbricht.
 log_file = None
 
 def log(message):
     print(message)
     if log_file:
         log_file.write(message + "\n")
+        log_file.flush()  # FIX: sicherstellen dass Einträge sofort auf Disk landen
 
 # ****************************** Helper Functions ******************************
 
 def calculate_md5(file_path):
     h = hashlib.md5()
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
+        for chunk in iter(lambda: f.read(65536), b""):  # FIX: 64 KB statt 4 KB → schneller bei grossen TIFs
             h.update(chunk)
     return h.hexdigest()
 
 def define_gds(path):
-    GDS = path.split("\\")[-2]
+    # FIX: os.path statt hartkodiertem "\\" → plattformrobust
+    GDS = os.path.basename(os.path.dirname(path))
     log(f"GDS erkannt: {GDS}\n")
     return GDS
 
 def wkt_footprint(full_file_path):
+    """Berechnet WKT-Footprint eines Rasters. Wird aktuell für SB_DSM benötigt."""
     raster_layer = gdal.Open(full_file_path)
+    # Hinweis: mit gdal.UseExceptions() wirft gdal.Open() bereits eine Exception,
+    # bevor None zurückgegeben wird — der Check bleibt als Sicherheitsnetz.
     if raster_layer is None:
         raise FileNotFoundError(f"Raster konnte nicht geöffnet werden: {full_file_path}")
-    gt = raster_layer.GetGeoTransform()
-    cols = raster_layer.RasterXSize
-    rows = raster_layer.RasterYSize
-    ulx, uly = gdal.ApplyGeoTransform(gt, 0, 0)
-    urx, ury = gdal.ApplyGeoTransform(gt, cols, 0)
-    llx, lly = gdal.ApplyGeoTransform(gt, 0, rows)
-    lrx, lry = gdal.ApplyGeoTransform(gt, cols, rows)
-    return f"POLYGON (({llx} {lly}, {lrx} {lry}, {urx} {ury}, {ulx} {uly}, {llx} {lly}))"
+    try:
+        gt = raster_layer.GetGeoTransform()
+        cols = raster_layer.RasterXSize
+        rows = raster_layer.RasterYSize
+        ulx, uly = gdal.ApplyGeoTransform(gt, 0, 0)
+        urx, ury = gdal.ApplyGeoTransform(gt, cols, 0)
+        llx, lly = gdal.ApplyGeoTransform(gt, 0, rows)
+        lrx, lry = gdal.ApplyGeoTransform(gt, cols, rows)
+        return f"POLYGON (({llx:.3f} {lly:.3f}, {lrx:.3f} {lry:.3f}, {urx:.3f} {ury:.3f}, {ulx:.3f} {uly:.3f}, {llx:.3f} {lly:.3f}))"
+    finally:
+        raster_layer = None  # GDAL-Dataset explizit freigeben
 
 def parse_line_id_to_hundredths(line_id):
     """
@@ -60,6 +71,9 @@ def parse_line_id_to_hundredths(line_id):
     """
     try:
         parts = line_id.split("_")
+        # FIX: explizite Prüfung statt IndexError aus dem Nichts
+        if len(parts) < 2:
+            raise ValueError(f"LineID '{line_id}' hat zu wenige Teile (mind. 2, getrennt durch '_')")
         date_str = parts[0]   # z.B. "20230820"
         time_str = parts[1]   # z.B. "0921" oder "092130" etc.
 
@@ -90,7 +104,7 @@ def parse_line_id_to_hundredths(line_id):
             "year": int(date_str[0:4]), "month": int(date_str[4:6]), "day": int(date_str[6:8]),
             "hh": hh, "mm": mm, "ss": ss, "hundredths": hundredths
         }
-    except Exception as e:
+    except (ValueError, IndexError) as e:  # FIX: spezifische Exceptions statt blanket Exception
         log(f"Fehler beim Parsen der LineID '{line_id}': {e}")
         return None
 
@@ -109,30 +123,32 @@ def format_stac_datetime(parsed):
     return (f"{parsed['year']:04d}-{parsed['month']:02d}-{parsed['day']:02d}"
             f"t{parsed['hh']:02d}{parsed['mm']:02d}{parsed['ss']:02d}{parsed['hundredths']:02d}")
 
-def format_first_acquisition(line_id):
-    """Formatiert FirstAcquisitionTime mit Hundertstelsekunden (ISO8601)."""
-    return format_iso8601_hundredths(parse_line_id_to_hundredths(line_id))
-
-def format_acquisition_times(line_id):
-    """Formatiert AcquisitionTimes mit Hundertstelsekunden (ISO8601)."""
+# FIX: format_first_acquisition und format_acquisition_times waren identisch → eine Funktion
+def format_acquisition_time(line_id):
+    """Formatiert eine LineID als ISO8601-Zeitstempel mit Hundertstelsekunden."""
     return format_iso8601_hundredths(parse_line_id_to_hundredths(line_id))
 
 def get_raster_attributes(file_path):
     raster_layer = gdal.Open(file_path)
+    # Hinweis: mit gdal.UseExceptions() wirft gdal.Open() bereits eine Exception,
+    # bevor None zurückgegeben wird — der Check bleibt als Sicherheitsnetz.
     if raster_layer is None:
         raise FileNotFoundError(f"Raster konnte nicht geöffnet werden: {file_path}")
-    gt = raster_layer.GetGeoTransform()
-    band = raster_layer.GetRasterBand(1)
-    px, py = abs(gt[1]), abs(gt[5])
-    cols, rows = raster_layer.RasterXSize, raster_layer.RasterYSize
-    bx, by = band.GetBlockSize()
-    return {
-        "CellSize": f"{(px+py)/2}",
-        "BlockSizeX": str(bx),
-        "BlockSizeY": str(by),
-        "CellCountWidth": str(cols),
-        "CellCountHeight": str(rows)
-    }
+    try:
+        gt = raster_layer.GetGeoTransform()
+        band = raster_layer.GetRasterBand(1)
+        px, py = abs(gt[1]), abs(gt[5])
+        cols, rows = raster_layer.RasterXSize, raster_layer.RasterYSize
+        bx, by = band.GetBlockSize()
+        return {
+            "CellSize": f"{(px + py) / 2:.4f}",  # FIX: fixe Dezimalstellen statt float-Artefakte wie "0.10000000000000001"
+            "BlockSizeX": str(bx),
+            "BlockSizeY": str(by),
+            "CellCountWidth": str(cols),
+            "CellCountHeight": str(rows)
+        }
+    finally:
+        raster_layer = None  # GDAL-Dataset explizit freigeben
 
 def extract_area(filename):
     """Extrahiert AREA zwischen Jahr (202X_) und _DOP im Dateinamen.
@@ -156,7 +172,7 @@ def extract_tile(filename):
         return "UNKNOWN"
 
 # ****************************** Sicherheits-Check ******************************
-def preview_xml_attributes(src, GDS, meta_info):
+def preview_xml_attributes(src, meta_info):
     """
     Zeigt eine Vorschau der XML-Attribute an (nur Anzeige, keine Datei-Erstellung).
     Gibt alle Attributwerte jeweils in einer separaten Zeile aus.
@@ -179,7 +195,8 @@ def preview_xml_attributes(src, GDS, meta_info):
     AOI = extract_area(example_file)
     example_tilekey = extract_tile(example_file)
 
-    print("CHECK-ref.SYS.; ReferenzSystem OK?: ", Quelle)
+    # FIX: src als Parameter verwenden statt globale Variable Quelle
+    print("CHECK-ref.SYS.; ReferenzSystem OK?: ", src)
     print(meta_info.get("Auftragstyp", ""))
     print(AOI)
     print(f"TileKey (Beispiel aus '{example_file}'): {example_tilekey}")
@@ -189,20 +206,18 @@ def preview_xml_attributes(src, GDS, meta_info):
     print(meta_info.get("TerrainModel", ""))
     print(f"NoData: {meta_info.get('NoData', '')}")
 
-    print(meta_info.get("allAreaLineIDs", ""))
-
     all_area_ids = meta_info.get("allAreaLineIDs", [])
-    acq_times = [format_acquisition_times(l) for l in all_area_ids]
+    print(",".join(all_area_ids))
+    # FIX: format_acquisition_time statt entferntem format_acquisition_times
+    acq_times = [format_acquisition_time(l) for l in all_area_ids]
     print(",".join(acq_times))
 
     line_ids = meta_info.get("Line_ID", [])
     print(",".join(line_ids))
-    
-    acq_times = [format_first_acquisition(l) for l in line_ids]
-    # print(",".join(acq_times))
 
     if line_ids:
-        print(format_first_acquisition(line_ids[0]))    
+        # FIX: format_acquisition_time statt entferntem format_first_acquisition
+        print(format_acquisition_time(line_ids[0]))
 
     print("\n============================================================\n")
 
@@ -248,7 +263,8 @@ def create_xml(file_path, GDS, meta_info):
     if not all_area_ids:
         raise ValueError("Meta-Attribut 'allAreaLineIDs' muss mindestens eine LineID enthalten!")
 
-    formatted_times = [format_acquisition_times(x) for x in all_area_ids]
+    # FIX: format_acquisition_time (zusammengeführte Funktion)
+    formatted_times = [format_acquisition_time(x) for x in all_area_ids]
     ET.SubElement(root, "AcquisitionTimes").text = ",".join(formatted_times)
 
     # FirstAcquisitionTime aus erster Line_ID mit Hundertstelsekunden
@@ -277,7 +293,7 @@ def create_xml(file_path, GDS, meta_info):
     with open(xml_filename, 'w', encoding="utf-8") as f:
         f.write(formatted_xml)
 
-    return AOI, format_acquisition_times(all_area_ids[0])
+    # FIX: kein Rückgabewert mehr — AOI und first_time wurden beim Aufrufer nie verwendet
 
 def update_file_csv(output_path, full_file_path, GDS):
     csv_file_path = os.path.join(output_path, 'files.csv')
@@ -290,34 +306,46 @@ def update_file_csv(output_path, full_file_path, GDS):
         tile = extract_tile(filename)
     elif GDS == "SB_DSM":
         tile = "1000"
-        footprint = wkt_footprint(full_file_path)
+        # FIX: wkt_footprint()-Aufruf entfernt — footprint wurde berechnet aber NIE in row_data verwendet
     elif GDS == "SB_DSM_PUNKTWOLKE":
         tile = name_parts[-4] + "_" + name_parts[-3]
     else:
         tile = ""
-        footprint = ""
 
     md5_hash = calculate_md5(full_file_path)
     row_data = f"NV\\{filename};{md5_hash};{tile};add;"
+
+    # FIX: keine führende Leerzeile mehr beim ersten Eintrag
+    file_is_new = not os.path.exists(csv_file_path) or os.path.getsize(csv_file_path) == 0
     with open(csv_file_path, 'a', encoding='utf-8') as f:
-        f.write("\n" + row_data)
+        if not file_is_new:
+            f.write("\n")
+        f.write(row_data)
 
 # ****************************** Main Functions ******************************
 
 def files_in_order(path, output_path, GDS, meta_info):
     global log_file
 
+    # FIX: erst hier erstellen (nicht auf Modul-Ebene) – gleiche Logik wie Script 1
+    os.makedirs(LOG_DIR, exist_ok=True)
+
     log_name = os.path.basename(output_path.rstrip("/\\")) + ".log"
     log_path = os.path.join(LOG_DIR, log_name)
     log_file = open(log_path, 'w', encoding='utf-8')
     log(f"Log-Datei erstellt: {log_path}")
 
-    for fn in os.listdir(path):
+    # Output-Verzeichnis sicherstellen — update_file_csv schreibt CSV direkt hinein
+    os.makedirs(output_path, exist_ok=True)
+
+    # FIX: sorted() für deterministische Verarbeitungsreihenfolge
+    for fn in sorted(os.listdir(path)):
         full_file_path = os.path.join(path, fn)
         if os.path.isfile(full_file_path) and fn.lower().endswith(('.tif', '.tiff', '.las', '.laz')):
             log(f"Verarbeite Datei: {fn}")
             try:
-                AOI, first_time_tmp = create_xml(full_file_path, GDS, meta_info)
+                # FIX: Rückgabewert nicht mehr auspacken (war nie verwendet)
+                create_xml(full_file_path, GDS, meta_info)
                 update_file_csv(output_path, full_file_path, GDS)
             except Exception as e:
                 log(f"Fehler bei Datei {fn}: {e}")
@@ -334,64 +362,78 @@ def create_and_copy_order(output_path, input_path, GDS):
         os.makedirs(os.path.join(output_path, 'PrecalculatedFormats', 'SB_DSM_PUNKTWOLKE'), exist_ok=True)
 
     log("\nStarte Kopiervorgang...\n")
-    for nb, file_name in enumerate(os.listdir(input_path), 1):
+    nb = 0  # FIX: eigener Zähler nur für tatsächlich kopierte Dateien (nicht Verzeichnisse)
+    for file_name in sorted(os.listdir(input_path)):
         source_file = os.path.join(input_path, file_name)
         if os.path.isfile(source_file):
             dst = os.path.join(new_order_path, file_name)
             try:
                 shutil.copy(source_file, dst)
+                nb += 1
+                log(f"Datei {nb} kopiert: {file_name}")
             except Exception as e:
                 log(f"Fehler beim Kopieren {file_name}: {e}")
-        log(f"Datei {nb} kopiert")
     log("Kopiervorgang abgeschlossen.")
 
 # ****************************** Working Part ******************************
+# Wird nur ausgeführt wenn das Script direkt gestartet wird (nicht bei Import).
+# Beim Start via GUI (0_main_GDWH_import_GUI.py) werden Pfade und meta_info
+# als Subprocess-Config übergeben und die Funktionen direkt aufgerufen.
 
-Quelle = r"A:\2025\BIRCH\DOP\LV95\DOP_NRGB_16BITS\1005"
-output_path = r"\\v0t0020a.adr.admin.ch\iprod\gdwh-ingest\BUCKET_INT\RASTER\SB_DOP_16\2025_BIRCH_DOP16_1005"
+if __name__ == "__main__":
 
-GDS = define_gds(output_path)
+    Quelle = r"A:\2025\BIRCH\DOP\LV95\DOP_NRGB_16BITS\1005"
+    output_path = r"\\v0t0020a.adr.admin.ch\iprod\gdwh-ingest\BUCKET_INT\RASTER\SB_DOP_16\2025_BIRCH_DOP16_1005"
 
-# *********************** Meta-Information *******************************
-meta_info = {
-    "Auftragstyp": "kry",
-        # kontrollieren:
-        # "kry"
-        # "ram"
-        # "bim"
-        # "mom"
-        # "wam"
-    "Line_ID": ["20250919_1005_12501"],
-        # (!)NUR die zu importierende Line_ID(!): kontrollieren!
-    "allAreaLineIDs": ["20250919_0947_12501", "20250919_0955_12501", "20250919_1005_12501", "20250919_1013_12501"],
-        # kontrollieren; (!)Alle LineIDs(!) des Mosaiks angeben!
-        # erste LineID (!)muss(!) die erste BefliegungsLinie (AufnahmeZeitpunkt) des AOIs sein!
-        # (z.B.: "20200821_0952_12504", "20200821_1009_12504", "20200821_1026_12504")
-    "NoData": "0 0 0 0",
-        # kontrollieren! Typische Werte (bei 16BIT, 4-Band TIF):
-        # "0 0 0 0" (schwarze Background-Pixel) / "65535 65535 65535 65535" (weisse Background-Pixel)!
-    "CustomAttribute": "Digital OrthoPhoto - (ADS Line) NRGB 16BIT",
-        # kontrollieren; "Digital OrthoPhoto - (ADS Line) NRGB 16BIT"
-    "SourceReferenceSystem": "(EPSG:2056) CH1903+ / LV95_LN02",
-        # kontrollieren! only possible Value ("EPSG:2056) CH1903+ / LV95_LN02"
-    "CameraSystem": "Leica ADS100",
-        # kontrollieren;
-        # "Leica ADS100"
-        # "Leica ADS80"
-        # "Leica DMC-4"
-    "TerrainModel": "Digital Surface Model (DSM photogrammetric autocorrelation)",
-        # kontrollieren;
-        # "Digital Surface Model (DSM photogrammetric autocorrelation)"
-        # "swissALTI3D"
-        # "swissALTI3D/DHM25"
-        # "swissSURFACE3D"
-}
+    # FIX: Pfad-Validierung vor dem Start — frühzeitiger Abbruch mit klarer Meldung
+    if not os.path.isdir(Quelle):
+        print(f"FEHLER: Quellpfad nicht erreichbar: {Quelle}")
+        sys.exit(1)
 
-# Sicherheitsvorschau anzeigen
-preview_xml_attributes(Quelle, GDS, meta_info)
+    GDS = define_gds(output_path)
 
-files_in_order(Quelle, output_path, GDS, meta_info)
-create_and_copy_order(output_path, Quelle, GDS)
+    # *********************** Meta-Information *******************************
+    meta_info = {
+        "Auftragstyp": "kry",
+            # kontrollieren:
+            # "kry"
+            # "ram"
+            # "bim"
+            # "mom"
+            # "wam"
+        "Line_ID": ["20250919_1005_12501"],
+            # (!)NUR die zu importierende Line_ID(!): kontrollieren!
+        "allAreaLineIDs": ["20250919_0947_12501", "20250919_0955_12501", "20250919_1005_12501", "20250919_1013_12501"],
+            # kontrollieren; (!)Alle LineIDs(!) des Mosaiks angeben!
+            # erste LineID (!)muss(!) die erste BefliegungsLinie (AufnahmeZeitpunkt) des AOIs sein!
+            # (z.B.: "20200821_0952_12504", "20200821_1009_12504", "20200821_1026_12504")
+        "NoData": "0 0 0 0",
+            # kontrollieren! Typische Werte (bei 16BIT, 4-Band TIF):
+            # "0 0 0 0" (schwarze Background-Pixel) / "65535 65535 65535 65535" (weisse Background-Pixel)!
+        "CustomAttribute": "Digital OrthoPhoto - (ADS Line) NRGB 16BIT",
+            # kontrollieren; "Digital OrthoPhoto - (ADS Line) NRGB 16BIT"
+        "SourceReferenceSystem": "(EPSG:2056) CH1903+ / LV95_LN02",
+            # kontrollieren! only possible Value ("EPSG:2056) CH1903+ / LV95_LN02"
+        "CameraSystem": "Leica ADS100",
+            # kontrollieren;
+            # "Leica ADS100"
+            # "Leica ADS80"
+            # "Leica DMC-4"
+        "TerrainModel": "Digital Surface Model (DSM photogrammetric autocorrelation)",
+            # kontrollieren;
+            # "Digital Surface Model (DSM photogrammetric autocorrelation)"
+            # "swissALTI3D"
+            # "swissALTI3D/DHM25"
+            # "swissSURFACE3D"
+    }
 
-if log_file:
-    log_file.close()
+    # Sicherheitsvorschau anzeigen
+    preview_xml_attributes(Quelle, meta_info)
+
+    # FIX: Log-Datei in try/finally schliessen → auch bei unerwarteten Exceptions sicher
+    try:
+        files_in_order(Quelle, output_path, GDS, meta_info)
+        create_and_copy_order(output_path, Quelle, GDS)
+    finally:
+        if log_file:
+            log_file.close()
