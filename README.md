@@ -14,8 +14,8 @@ Python-Scripts zur automatisierten XML-Generierung, Datenvalidierung und Import-
 ```
 python 0_main_GDWH_import_GUI.py
 ```
-
-Tkinter-Oberfläche – alle Felder werden interaktiv ausgefüllt, kein manuelles Script-Editieren nötig.
+open CMD-Terminal> *python "...\0_main_GDWH_import_GUI.py"*
+GUI – alle Felder werden interaktiv ausgefüllt, kein manuelles Script-Editieren nötig.
 
 ---
 
