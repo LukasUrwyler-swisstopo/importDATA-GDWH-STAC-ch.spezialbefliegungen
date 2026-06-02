@@ -11,13 +11,15 @@ from xml.dom import minidom
 import sys
 
 # ****************************** Log-Funktion ******************************
-LOG_DIR = r"\\v0t0020a.adr.admin.ch\prod\topo\tbk\tbkn\BAFUprod\GDWH_STAC_imports\upload_GDWH\scrip_logs"
+# Hinweis: Dieses Script gibt alles auf die Konsole aus. Beim Start via GUI
+# faengt die GUI diese Ausgabe ab und schreibt sie in ihr eigenes Log
+# (logs\GDWHimport_...). Ein separates Datei-Log wird hier nicht mehr gefuehrt.
+# log_file bleibt als None bestehen, da der OSGeo4W-Runner nach dem Lauf
+# darauf zugreift (if mod.log_file: ...).
 log_file = None
 
 def log(message):
     print(message)
-    if log_file:
-        log_file.write(message + "\n")
 
 # ****************************** Helper ******************************
 def calculate_md5(file_path):
@@ -491,17 +493,9 @@ def cleanup_input_folder(src, GDS):
 
 
 def files_in_order(src, out, GDS, meta):
-    global log_file
     missing_xml = []
 
-    os.makedirs(LOG_DIR, exist_ok=True)
-
-    log_name = os.path.basename(out.rstrip("/\\")) + ".log"
-    log_path = os.path.join(LOG_DIR, log_name)
-    log_file = open(log_path, 'w', encoding='utf-8')
-    log(f"Log-Datei: {log_path}")
-
-    # Altbestaende bereinigen (nur SB_DOP/SB_DOP_16, gezielte Blacklist),
+    # Altbestaende bereinigen (GDS-spezifische Whitelist),
     # bevor neue XML erzeugt werden.
     cleanup_input_folder(src, GDS)
 
@@ -613,9 +607,5 @@ if __name__ == "__main__":
     preview_xml_attributes(Quelle, GDS, meta_info)
 
     # Processierung wenn YES
-    try:
-        files_in_order(Quelle, Ziel, GDS, meta_info)
-        create_and_copy_order(Ziel, Quelle, GDS)
-    finally:
-        if log_file:
-            log_file.close()
+    files_in_order(Quelle, Ziel, GDS, meta_info)
+    create_and_copy_order(Ziel, Quelle, GDS)

@@ -1203,6 +1203,47 @@ class GDWHApp(tk.Tk):
                 pass
         self.destroy()
 
+    # ── Helfer: AREA + Archiv-Log ─────────────────────────────────────────────
+    @staticmethod
+    def _area_from_ziel(ziel, gds):
+        """Leitet den AREA-Namen aus dem Zielordner ab.
+
+        Zielordner folgt dem Muster '20XX_AREA_<TYP>...' (z.B.
+        '2025_GRIES_DOP16_1005'). Es wird der Teil zwischen Jahr und dem
+        naechsten Typ-Token (DOP/DSM/TIN/hillshade) genommen. Schlaegt das
+        fehl, dient der bereinigte Ordnername als Fallback (nur fuer den
+        Log-Namen, daher unkritisch).
+        """
+        base = os.path.basename(ziel.rstrip("/\\"))
+        m = re.search(r'20\d{2}_(.+?)_(?:DOP|DSM|TIN|hillshade)',
+                      base, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Fallback: fuehrendes Jahr abschneiden, sonst ganzer Basename
+        m2 = re.match(r'20\d{2}_(.+)', base)
+        return (m2.group(1) if m2 else base) or "UNKNOWN"
+
+    @staticmethod
+    def _sanitize(text):
+        """Macht einen String dateinamen-tauglich (keine Pfad-/Sonderzeichen)."""
+        return re.sub(r'[^A-Za-z0-9_.-]', '_', str(text)).strip("_") or "UNKNOWN"
+
+    def _write_archive_log(self, gds, area, line_id):
+        """Haengt einen Eintrag an das fortlaufende Archiv-Log an.
+
+        Eine einzige Datei (logs\\GDWHimport_archived_AREA_proGDS.log), die
+        bei jedem Import um eine Zeile erweitert wird:  {GDS}_{AREA}_{Line_ID}
+        """
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            archive_path = os.path.join(LOG_DIR, "GDWHimport_archived_AREA_proGDS.log")
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            entry = f"{gds}_{area}_{line_id}"
+            with open(archive_path, "a", encoding="utf-8") as f:
+                f.write(f"{stamp}  {entry}\n")
+        except Exception as e:
+            print(f"[WARNUNG] Archiv-Log konnte nicht geschrieben werden: {e}")
+
     # ── Import starten ────────────────────────────────────────────────────────
     def _start_import(self):
         if self._running:
@@ -1246,14 +1287,24 @@ class GDWHApp(tk.Tk):
         self._clear_log()
 
         # Logdatei öffnen (logs-Ordner neben diesem Script)
+        # Name: GDWHimport_{GDS}_{AREA}_{Line_ID}_{YYYYmmdd_HHMMSS}.log
+        line_ids   = meta.get("Line_ID", [])
+        first_line = line_ids[0] if line_ids else "UNKNOWN"
+        area       = self._area_from_ziel(ziel, gds)
+        area_s     = self._sanitize(area)
+        line_s     = self._sanitize(first_line)
         try:
             os.makedirs(LOG_DIR, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_path = os.path.join(LOG_DIR, f"GDWH_{gds}_{ts}.log")
+            log_path = os.path.join(
+                LOG_DIR, f"GDWHimport_{gds}_{area_s}_{line_s}_{ts}.log")
             self._log_file = open(log_path, "w", encoding="utf-8")
         except Exception as e:
             self._log_file = None
             print(f"[WARNUNG] Logdatei konnte nicht erstellt werden: {e}")
+
+        # Fortlaufendes Archiv-Log erweitern: {GDS}_{AREA}_{Line_ID}
+        self._write_archive_log(gds, area_s, line_s)
 
         self._log(f"=== GDWH Import gestartet – GDS: {gds} ===\n\n")
 
