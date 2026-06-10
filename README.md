@@ -8,7 +8,7 @@ Python-Scripts zur automatisierten XML-Generierung, Datenvalidierung und Import-
 
 ### GUI
 
-<img width="1273" height="1524" alt="grafik" src="https://github.com/user-attachments/assets/77cdad84-0a11-4841-83e2-fd443ddf19ed" />
+<img width="1276" height="1519" alt="grafik" src="https://github.com/user-attachments/assets/c7212c9c-3f47-4227-9646-ab0120e3b903" />
 
 
 ```
