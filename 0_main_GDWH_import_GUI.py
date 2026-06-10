@@ -186,12 +186,18 @@ class _QueueWriter(io.TextIOBase):
 
 # ─── LineID-Listbox-Widget ────────────────────────────────────────────────────
 class LineIDWidget(ttk.LabelFrame):
-    def __init__(self, parent, label, **kw):
+    def __init__(self, parent, label, comment="", **kw):
         super().__init__(parent, text=label, padding=6, **kw)
         self._max_ids = None  # None = unbegrenzt
+        self._comment_text = comment
+        self._comment_lbl = None
         self._build()
 
     def _build(self):
+        if self._comment_text:
+            self._comment_lbl = ttk.Label(self, text=self._comment_text,
+                                           font=("Segoe UI", 8, "italic"))
+            self._comment_lbl.pack(fill="x", pady=(0, 3))
         ef = ttk.Frame(self)
         ef.pack(fill="x")
         self.var = tk.StringVar()
@@ -222,7 +228,7 @@ class LineIDWidget(ttk.LabelFrame):
         self._max_ids = n
         if n == 1:
             self._fmt_lbl.config(
-                text=" Format: YYYYMMDD_HHMM_QQQQQ  |  SB_DOP_16: genau 1 Line_ID")
+                text=" Format: YYYYMMDD_HHMM_QQQQQ")
         else:
             self._fmt_lbl.config(
                 text=" Format: YYYYMMDD_HHMM_QQQQQ  |  Mehrere IDs: aus Excel einfügen (Ctrl+V)")
@@ -310,6 +316,8 @@ class LineIDWidget(ttk.LabelFrame):
             highlightbackground=T["sep"], highlightcolor=T["sep"],
         )
         self._fmt_lbl.config(foreground=T["fg_dim"])
+        if self._comment_lbl:
+            self._comment_lbl.config(foreground=T["fg_dim"])
 
 
 
@@ -330,7 +338,7 @@ class SicherheitsCheckDialog(tk.Toplevel):
         "skip": ("#f5f5f5", "#757575"),
     }
 
-    def __init__(self, parent, gds, meta, quelle, ziel, dark=True):
+    def __init__(self, parent, gds, meta, quelle, ziel, area="", stac_dt="", dark=True):
         super().__init__(parent)
         self.result = False
         self._dark = dark
@@ -436,6 +444,8 @@ class SicherheitsCheckDialog(tk.Toplevel):
         # Metadaten
         sec1 = _section("METADATEN")
         _kv(sec1, "GDS:", gds)
+        _kv(sec1, "Area:", area)
+        _kv(sec1, "STAC ITEM - Name:", stac_dt)
         _kv(sec1, "Auftragstyp:", meta.get("Auftragstyp", ""))
         _kv(sec1, "CustomAttribute:", meta.get("CustomAttribute", ""))
         _kv(sec1, "Line_ID:", ", ".join(meta.get("Line_ID", [])))
@@ -654,7 +664,7 @@ class GDWHApp(tk.Tk):
         self._theme_btn.pack(side="right", padx=12)
 
         # GDS-Auswahl
-        gds_frame = ttk.LabelFrame(self, text="GDS auswählen", padding=8)
+        gds_frame = ttk.LabelFrame(self, text="GDS auswählen", padding=8, style="Section.TLabelframe")
         gds_frame.pack(fill="x", padx=12, pady=(8, 0))
         for col, (gds, desc) in enumerate(GDS_ITEMS):
             ttk.Radiobutton(gds_frame, text=f"{gds}\n{desc}",
@@ -699,13 +709,15 @@ class GDWHApp(tk.Tk):
                           lambda e: self._canvas.itemconfig(win_id, width=e.width))
         self._canvas.bind_all("<MouseWheel>",
                               lambda e: self._canvas.yview_scroll(-1*(e.delta//120), "units"))
+        # Mausrad soll Combobox-Auswahl nicht versehentlich verstellen
+        self.bind_class("TCombobox", "<MouseWheel>", self._fwd_wheel_to_canvas)
 
         self._build_meta(self._sf)
         self._build_paths(self._sf)
 
         # Log
         ttk.Separator(self).pack(fill="x", padx=12, pady=4)
-        log_frame = ttk.LabelFrame(self, text="Log-Ausgabe", padding=4)
+        log_frame = ttk.LabelFrame(self, text="Log-Ausgabe", padding=4, style="Section.TLabelframe")
         log_frame.pack(fill="x", padx=12, pady=(0, 4))
         self.log_box = scrolledtext.ScrolledText(
             log_frame, height=11, wrap="word", state="disabled",
@@ -730,13 +742,13 @@ class GDWHApp(tk.Tk):
                     command=self._clear_log).pack(side="right", padx=(0, 10))
 
     def _build_meta(self, parent):
-        sec = ttk.LabelFrame(parent, text="Meta-Informationen", padding=10)
+        sec = ttk.LabelFrame(parent, text="Meta-Informationen", padding=10, style="Section.TLabelframe")
         sec.pack(fill="x", pady=(0, 6))
         sec.columnconfigure(1, weight=1)
         r = 0
 
         # Auftragstyp
-        ttk.Label(sec, text="Auftragstyp:").grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Label(sec, text="Auftragstyp:", font=("Segoe UI", 9, "bold")).grid(row=r, column=0, sticky="w", pady=3)
         self.auftragstyp_var = tk.StringVar(value=AUFTRAGSTYPEN[0])
         ttk.Combobox(sec, textvariable=self.auftragstyp_var, values=AUFTRAGSTYPEN,
                       state="readonly", width=10
@@ -744,36 +756,50 @@ class GDWHApp(tk.Tk):
         r += 1
 
         # CustomAttribute – automatisch per GDS, kein Dropdown
-        ttk.Label(sec, text="CustomAttribute:").grid(row=r, column=0, sticky="nw", pady=3)
+        ttk.Label(sec, text="CustomAttribute:", font=("Segoe UI", 9, "bold")).grid(row=r, column=0, sticky="nw", pady=3)
         ca_row = ttk.Frame(sec)
         ca_row.grid(row=r, column=1, sticky="ew", padx=(8, 0), pady=3)
         self.custom_var  = tk.StringVar()
         self._custom_lbl = ttk.Label(ca_row, textvariable=self.custom_var,
                                       font=("", 9, "italic"), wraplength=560, justify="left")
         self._custom_lbl.pack(side="left", anchor="w")
-        ca_fix = ttk.Label(ca_row, text="  [wird automatisch gesetzt]", font=("", 8))
+        ca_fix = ttk.Label(ca_row, text="", font=("", 8))
         ca_fix.pack(side="left")
         self._accent_labels.append(self._custom_lbl)
         self._dim_labels.append(ca_fix)
         r += 1
 
-        # Line_ID
-        self.lineid_w = LineIDWidget(sec, "Line_ID")
+        # Line_ID – Listbox für mehrere IDs (SB_DOP / SB_DSM / SB_DSM_PUNKTWOLKE)
+        self.lineid_w = LineIDWidget(sec, "Line_ID",
+            comment="alle LineIDs des AOI; die erste/oberste muss die erste beflogene Line_ID des AOI sein")
         self.lineid_w.grid(row=r, column=0, columnspan=2, sticky="ew", pady=4)
-        self.lineid_hint = ttk.Label(sec, font=("", 8),
-            text="ℹ  SB_DOP_16: genau 1 Line_ID – wird als Unterordner-Name der Quelle verwendet")
-        self.lineid_hint.grid(row=r+1, column=0, columnspan=2, sticky="w")
-        self._hint_labels.append(self.lineid_hint)
-        r += 2
+
+        # Line_ID – einfaches Eingabefeld für SB_DOP_16 (genau 1 ID)
+        self.lineid_single_lf = ttk.LabelFrame(sec, text="Line_ID", padding=6)
+        self.lineid_single_lf.grid(row=r, column=0, columnspan=2, sticky="ew", pady=4)
+        _single_comment = ttk.Label(self.lineid_single_lf,
+            text="Line_ID des DOP NRGB 16BIT-Flugstreifens – nur eine Line_ID möglich",
+            font=("Segoe UI", 8, "italic"))
+        _single_comment.pack(fill="x", pady=(0, 3))
+        self._dim_labels.append(_single_comment)
+        _ef = ttk.Frame(self.lineid_single_lf)
+        _ef.pack(fill="x")
+        self.lineid_single_var = tk.StringVar()
+        ttk.Entry(_ef, textvariable=self.lineid_single_var, width=30).pack(side="left")
+        _fmt_lbl = ttk.Label(_ef, text="  Format: YYYYMMDD_HHMM_QQQQQ", font=("", 8))
+        _fmt_lbl.pack(side="left", padx=(6, 0))
+        self._dim_labels.append(_fmt_lbl)
+        self.lineid_single_lf.grid_remove()  # standardmässig versteckt
+        r += 1
 
         # allAreaLineIDs (nur SB_DOP_16)
-        self.all_area_w = LineIDWidget(sec,
-            "allAreaLineIDs  (alle Fluglinien Line_IDs des AOIs – mindestens eine Line_ID nötig)")
+        self.all_area_w = LineIDWidget(sec, "allAreaLineIDs",
+            comment="alle Fluglinien Line_IDs des AOIs – mindestens eine Line_ID nötig")
         self.all_area_w.grid(row=r, column=0, columnspan=2, sticky="ew", pady=4)
         r += 1
 
         # NoData
-        self.nodata_lbl  = ttk.Label(sec, text="NoData:")
+        self.nodata_lbl  = ttk.Label(sec, text="NoData:", font=("Segoe UI", 9, "bold"))
         self.nodata_lbl.grid(row=r, column=0, sticky="w", pady=3)
         self.nodata_var  = tk.StringVar()
         self.nodata_cb   = ttk.Combobox(sec, textvariable=self.nodata_var,
@@ -785,7 +811,7 @@ class GDWHApp(tk.Tk):
         r += 2
 
         # TerrainModel
-        ttk.Label(sec, text="TerrainModel:").grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Label(sec, text="TerrainModel:", font=("Segoe UI", 9, "bold")).grid(row=r, column=0, sticky="w", pady=3)
         self.terrain_var = tk.StringVar(value=TERRAIN_MODELS[0])
         ttk.Combobox(sec, textvariable=self.terrain_var, values=TERRAIN_MODELS,
                       state="readonly", width=68
@@ -793,26 +819,26 @@ class GDWHApp(tk.Tk):
         r += 1
 
         # SourceReferenceSystem (unveränderlich)
-        ttk.Label(sec, text="SourceRefSys:").grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Label(sec, text="SourceRefSys:", font=("Segoe UI", 9, "bold")).grid(row=r, column=0, sticky="w", pady=3)
         srs_row = ttk.Frame(sec)
         srs_row.grid(row=r, column=1, sticky="w", padx=(8, 0), pady=3)
         srs_val = ttk.Label(srs_row, text=SOURCE_REF_SYS, font=("", 9, "bold"))
         srs_val.pack(side="left")
-        srs_fix = ttk.Label(srs_row, text="  [kein anderer Wert möglich]", font=("", 8))
+        srs_fix = ttk.Label(srs_row, text="  [Standard]", font=("", 8))
         srs_fix.pack(side="left")
         self._accent_labels.append(srs_val)
         self._dim_labels.append(srs_fix)
         r += 1
 
         # CameraSystem
-        ttk.Label(sec, text="CameraSystem:").grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Label(sec, text="CameraSystem:", font=("Segoe UI", 9, "bold")).grid(row=r, column=0, sticky="w", pady=3)
         self.camera_var = tk.StringVar(value=CAMERA_SYSTEMS[0])
         ttk.Combobox(sec, textvariable=self.camera_var, values=CAMERA_SYSTEMS,
                       state="readonly", width=20
                       ).grid(row=r, column=1, sticky="w", padx=(8, 0), pady=3)
 
     def _build_paths(self, parent):
-        sec = ttk.LabelFrame(parent, text="Pfade", padding=10)
+        sec = ttk.LabelFrame(parent, text="Pfade", padding=10, style="Section.TLabelframe")
         sec.pack(fill="x", pady=(0, 6))
         sec.columnconfigure(1, weight=1)
         r = 0
@@ -822,7 +848,7 @@ class GDWHApp(tk.Tk):
         self.if_frame.grid(row=r, column=0, columnspan=3, sticky="ew")
         self.if_frame.columnconfigure(1, weight=1)
         ttk.Label(self.if_frame, text="INPUT_FOLDER\n(DOP_NRGB_16BITS\nHauptordner):",
-                   justify="left").grid(row=0, column=0, sticky="w", pady=3)
+                   justify="left", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", pady=3)
         self.if_var = tk.StringVar()
         ttk.Entry(self.if_frame, textvariable=self.if_var
                    ).grid(row=0, column=1, sticky="ew", padx=(8, 4), pady=3)
@@ -838,7 +864,7 @@ class GDWHApp(tk.Tk):
         self.quelle_frame = ttk.Frame(sec)
         self.quelle_frame.grid(row=r, column=0, columnspan=3, sticky="ew")
         self.quelle_frame.columnconfigure(1, weight=1)
-        ttk.Label(self.quelle_frame, text="Data-Input Path:").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Label(self.quelle_frame, text="Data-Input Path:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", pady=3)
         self.quelle_var = tk.StringVar()
         ttk.Entry(self.quelle_frame, textvariable=self.quelle_var
                    ).grid(row=0, column=1, sticky="ew", padx=(8, 4), pady=3)
@@ -851,7 +877,7 @@ class GDWHApp(tk.Tk):
         r += 1
 
         # Ziel
-        ttk.Label(sec, text="GDWH-BUCKET Path,\n(GDWH-Datapackage):").grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Label(sec, text="GDWH-BUCKET Path,\n(GDWH-Datapackage):", font=("Segoe UI", 9, "bold")).grid(row=r, column=0, sticky="w", pady=3)
         self.ziel_var = tk.StringVar()
         ttk.Entry(sec, textvariable=self.ziel_var
                    ).grid(row=r, column=1, sticky="ew", padx=(8, 4), pady=3)
@@ -863,6 +889,11 @@ class GDWHApp(tk.Tk):
             font=("", 8))
         ziel_hint.grid(row=r+1, column=1, sticky="w", padx=(8, 0))
         self._dim_labels.append(ziel_hint)
+
+    def _fwd_wheel_to_canvas(self, event):
+        """Mausrad über Combobox scrollt den Canvas, ändert Auswahl nicht."""
+        self._canvas.yview_scroll(-1 * (event.delta // 120), "units")
+        return "break"
 
     # ── Windows Titelleiste Dark Mode ─────────────────────────────────────────
     def _set_titlebar_dark(self, dark):
@@ -903,7 +934,11 @@ class GDWHApp(tk.Tk):
         )
         s.configure("TFrame",      background=T["panel"])
         s.configure("TLabelframe", background=T["panel"], bordercolor=T["sep"])
-        s.configure("TLabelframe.Label", background=T["panel"], foreground=T["fg"])
+        s.configure("TLabelframe.Label", background=T["panel"], foreground=T["fg"],
+                    font=("Segoe UI", 9, "bold"))
+        s.configure("Section.TLabelframe", background=T["panel"], bordercolor=T["sep"])
+        s.configure("Section.TLabelframe.Label", background=T["panel"], foreground=T["accent"],
+                    font=("Segoe UI", 10, "bold"))
         s.configure("TLabel",      background=T["panel"], foreground=T["fg"])
         s.configure("TButton",
             background=T["btn"], foreground=T["fg"],
@@ -1027,14 +1062,14 @@ class GDWHApp(tk.Tk):
         # CustomAttribute – fix per GDS
         self.custom_var.set(GDS_CUSTOM_ATTR[gds])
 
-        # Line_ID Label + Limit + Hinweis
-        self.lineid_w.config(
-            text=("Line_ID  (die Line_ID der DOP NRGB 16BIT-Fluglinie – nur eine Line_ID möglich)"
-                  if is_d16 else "Line_ID  (alle LineIDs des Mosaiks/Gebiets)")
-        )
-        self.lineid_w.set_max_ids(1 if is_d16 else None)
-        self.lineid_hint.grid() if is_d16 else self.lineid_hint.grid_remove()
-        self.all_area_w.grid()  if is_d16 else self.all_area_w.grid_remove()
+        # Line_ID: einfaches Eingabefeld für SB_DOP_16, Listbox für alle anderen
+        if is_d16:
+            self.lineid_w.grid_remove()
+            self.lineid_single_lf.grid()
+        else:
+            self.lineid_single_lf.grid_remove()
+            self.lineid_w.grid()
+        self.all_area_w.grid() if is_d16 else self.all_area_w.grid_remove()
 
         # NoData
         if gds == "SB_DSM":
@@ -1096,9 +1131,14 @@ class GDWHApp(tk.Tk):
                 "Bitte Pfad via 'Ändern…' festlegen  (z.B. C:\\OSGeo4W\\bin\\python3.exe)."
             )
 
-        if not self.lineid_w.get_ids():
-            errors.append("Mindestens eine Line_ID ist erforderlich.")
         if gds == "SB_DOP_16":
+            lid = self.lineid_single_var.get().strip()
+            if not lid:
+                errors.append("Line_ID ist erforderlich.")
+            elif not LINE_ID_PAT.match(lid):
+                errors.append(
+                    f"Line_ID – ungültiges Format.\n"
+                    f"Erwartet: YYYYMMDD_HHMM_QQQQQ\nEingabe: {lid}")
             if not self.all_area_w.get_ids():
                 errors.append("Mindestens eine allAreaLineID ist erforderlich.")
             if_path = self.if_var.get().strip().strip('"')
@@ -1107,6 +1147,8 @@ class GDWHApp(tk.Tk):
             elif not os.path.isdir(if_path):
                 errors.append(f"INPUT_FOLDER nicht gefunden:\n  {if_path}")
         else:
+            if not self.lineid_w.get_ids():
+                errors.append("Mindestens eine Line_ID ist erforderlich.")
             q = self.quelle_var.get().strip().strip('"')
             if not q:
                 errors.append("Quelle fehlt.")
@@ -1137,7 +1179,8 @@ class GDWHApp(tk.Tk):
         meta = {
             "Auftragstyp":           self.auftragstyp_var.get(),
             "CustomAttribute":       self.custom_var.get(),
-            "Line_ID":               self.lineid_w.get_ids(),
+            "Line_ID":               ([self.lineid_single_var.get().strip()]
+                                      if gds == "SB_DOP_16" else self.lineid_w.get_ids()),
             "TerrainModel":          self.terrain_var.get(),
             "SourceReferenceSystem": SOURCE_REF_SYS,
             "CameraSystem":          self.camera_var.get(),
@@ -1224,21 +1267,74 @@ class GDWHApp(tk.Tk):
         return (m2.group(1) if m2 else base) or "UNKNOWN"
 
     @staticmethod
+    def _extract_area_from_filename(filename, gds):
+        """Identische Regex-Logik wie extract_area() in den Sub-Scripts."""
+        if gds in ("SB_DOP", "SB_DOP_16"):
+            m = re.search(r'20\d{2}_(.+?)_DOP', filename, re.IGNORECASE)
+        elif gds == "SB_DSM":
+            if "hillshade" in filename.lower():
+                m = re.search(r'20\d{2}_(.+?)_hillshade', filename, re.IGNORECASE)
+            else:
+                m = re.search(r'20\d{2}_(.+?)_DSM', filename, re.IGNORECASE)
+        elif gds == "SB_DSM_PUNKTWOLKE":
+            m = re.search(r'20\d{2}_(.+?)_TIN', filename, re.IGNORECASE)
+        else:
+            m = None
+        return m.group(1) if m else "UNKNOWN"
+
+    @staticmethod
+    def _extract_area_from_source(src_folder, gds):
+        """Area aus erstem passenden Dateinamen im Quellordner (inkl. 1 Unterebene).
+
+        Für SB_DOP_16: src_folder = INPUT_FOLDER (Dateien evtl. noch nicht reorganisiert).
+        Für andere GDS: src_folder = Data-Input Path.
+        """
+        extensions = ('.tif', '.tiff', '.laz')
+        if not os.path.isdir(src_folder):
+            return "—  (Ordner nicht gefunden)"
+        try:
+            for fn in sorted(os.listdir(src_folder)):
+                if fn.lower().endswith(extensions):
+                    return GDWHApp._extract_area_from_filename(fn, gds)
+            # Eine Ebene tiefer (SB_DOP_16 vor/nach Reorganisation)
+            for sub in sorted(os.listdir(src_folder)):
+                sub_path = os.path.join(src_folder, sub)
+                if os.path.isdir(sub_path):
+                    for fn in sorted(os.listdir(sub_path)):
+                        if fn.lower().endswith(extensions):
+                            return GDWHApp._extract_area_from_filename(fn, gds)
+        except Exception:
+            pass
+        return "—  (keine passende Datei gefunden)"
+
+    @staticmethod
+    def _format_stac_datetime(line_id):
+        """YYYYMMDD_HHMM_... → YYYY-MM-DDtHHMM0000  (identisch zu Sub-Script-Logik)"""
+        if line_id and len(line_id) >= 13:
+            return f"{line_id[0:4]}-{line_id[4:6]}-{line_id[6:8]}t{line_id[9:13]}0000"
+        return "—"
+
+    @staticmethod
     def _sanitize(text):
         """Macht einen String dateinamen-tauglich (keine Pfad-/Sonderzeichen)."""
         return re.sub(r'[^A-Za-z0-9_.-]', '_', str(text)).strip("_") or "UNKNOWN"
 
-    def _write_archive_log(self, gds, area, line_id):
+    def _write_archive_log(self, gds, area, line_id, auftragstyp=""):
         """Haengt einen Eintrag an das fortlaufende Archiv-Log an.
 
-        Eine einzige Datei (logs\\GDWHimport_archived_AREA_proGDS.log), die
-        bei jedem Import um eine Zeile erweitert wird:  {GDS}_{AREA}_{Line_ID}
+        Format:  {stamp}  {GDS}_{AREA}_{Line_ID} = {STAC-Link}
         """
         try:
             os.makedirs(LOG_DIR, exist_ok=True)
             archive_path = os.path.join(LOG_DIR, "GDWHimport_archived_AREA_proGDS.log")
-            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            entry = f"{gds}_{area}_{line_id}"
+            stamp     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stac_dt   = self._format_stac_datetime(line_id)
+            stac_link = (
+                "https://sys-data.int.bgdi.ch/#/collections/"
+                "ch.swisstopo.spezialbefliegungen/items/"
+                f"{auftragstyp}-{stac_dt}"
+            )
+            entry = f"{gds}_{area}_{line_id} = {stac_link}"
             with open(archive_path, "a", encoding="utf-8") as f:
                 f.write(f"{stamp}  {entry}\n")
         except Exception as e:
@@ -1274,8 +1370,12 @@ class GDWHApp(tk.Tk):
                 return
 
         # Sicherheitscheck
+        _first_lid = meta.get("Line_ID", [""])[0]
         dlg = SicherheitsCheckDialog(
-            self, gds, meta, quelle_display, ziel, dark=self._dark,
+            self, gds, meta, quelle_display, ziel,
+            area=self._extract_area_from_source(quelle, gds),
+            stac_dt=self._format_stac_datetime(_first_lid),
+            dark=self._dark,
         )
         if not dlg.wait():
             return
@@ -1303,8 +1403,9 @@ class GDWHApp(tk.Tk):
             self._log_file = None
             print(f"[WARNUNG] Logdatei konnte nicht erstellt werden: {e}")
 
-        # Fortlaufendes Archiv-Log erweitern: {GDS}_{AREA}_{Line_ID}
-        self._write_archive_log(gds, area_s, line_s)
+        # Fortlaufendes Archiv-Log erweitern: {GDS}_{AREA}_{Line_ID} = {STAC-Link}
+        self._write_archive_log(gds, area_s, line_s,
+                                auftragstyp=meta.get("Auftragstyp", ""))
 
         self._log(f"=== GDWH Import gestartet – GDS: {gds} ===\n\n")
 
