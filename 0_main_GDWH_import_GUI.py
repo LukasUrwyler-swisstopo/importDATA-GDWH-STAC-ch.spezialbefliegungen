@@ -854,7 +854,6 @@ class GDWHApp(tk.Tk):
         ttk.Label(self.if_frame, text="INPUT_FOLDER\n(DOP_NRGB_16BITS\nHauptordner):",
                    justify="left", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", pady=3)
         self.if_var = tk.StringVar()
-        self.if_var.trace_add("write", self._on_input_path_change)
         ttk.Entry(self.if_frame, textvariable=self.if_var
                    ).grid(row=0, column=1, sticky="ew", padx=(8, 4), pady=3)
         ttk.Button(self.if_frame, text="Ordner…",
@@ -871,7 +870,6 @@ class GDWHApp(tk.Tk):
         self.quelle_frame.columnconfigure(1, weight=1)
         ttk.Label(self.quelle_frame, text="Data-Input Path:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", pady=3)
         self.quelle_var = tk.StringVar()
-        self.quelle_var.trace_add("write", self._on_input_path_change)
         ttk.Entry(self.quelle_frame, textvariable=self.quelle_var
                    ).grid(row=0, column=1, sticky="ew", padx=(8, 4), pady=3)
         ttk.Button(self.quelle_frame, text="Ordner…",
@@ -1125,10 +1123,6 @@ class GDWHApp(tk.Tk):
         folder = filedialog.askdirectory(initialdir=init, title="Ordner auswählen")
         if folder:
             var.set(folder.replace("/", "\\"))
-
-    def _on_input_path_change(self, *_):
-        if self.ziel_var.get():
-            self.ziel_var.set("")
 
     # ── Validierung ───────────────────────────────────────────────────────────
     def _validate(self):
