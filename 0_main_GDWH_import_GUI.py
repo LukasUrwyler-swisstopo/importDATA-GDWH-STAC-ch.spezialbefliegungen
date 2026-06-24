@@ -628,10 +628,12 @@ class GDWHApp(tk.Tk):
         self.minsize(720, min(860, win_h))
         self.resizable(True, True)
 
-        self._running       = False
-        self._dark          = False
-        self._log_q         = queue.Queue()
-        self._log_file      = None
+        self._running         = False
+        self._dark            = False
+        self._log_q           = queue.Queue()
+        self._log_file        = None
+        self._pending_archive = None
+        self._log_visible     = False
         self.gds_var        = tk.StringVar(value="SB_DOP")
         self._dim_labels    = []   # Labels mit fg_dim (grau)
         self._accent_labels = []   # Labels mit accent (blau)
@@ -712,15 +714,14 @@ class GDWHApp(tk.Tk):
         # Mausrad soll Combobox-Auswahl nicht versehentlich verstellen
         self.bind_class("TCombobox", "<MouseWheel>", self._fwd_wheel_to_canvas)
 
-        self._build_meta(self._sf)
         self._build_paths(self._sf)
+        self._build_meta(self._sf)
 
-        # Log
-        ttk.Separator(self).pack(fill="x", padx=12, pady=4)
-        log_frame = ttk.LabelFrame(self, text="Log-Ausgabe", padding=4, style="Section.TLabelframe")
-        log_frame.pack(fill="x", padx=12, pady=(0, 4))
+        # Log (initial versteckt – per Terminal-Button einblendbar)
+        self._log_sep = ttk.Separator(self)
+        self._log_frame = ttk.LabelFrame(self, text="Log-Ausgabe", padding=4, style="Section.TLabelframe")
         self.log_box = scrolledtext.ScrolledText(
-            log_frame, height=11, wrap="word", state="disabled",
+            self._log_frame, height=11, wrap="word", state="disabled",
             font=("Courier New", 9))
         self.log_box.pack(fill="both", expand=True)
 
@@ -740,6 +741,9 @@ class GDWHApp(tk.Tk):
         self.start_btn.pack(side="right", ipadx=22, ipady=7)
         ttk.Button(self._btn_row, text="Log löschen",
                     command=self._clear_log).pack(side="right", padx=(0, 10))
+        self._terminal_btn = ttk.Button(self._btn_row, text="Terminal ▾",
+                                         command=self._toggle_log)
+        self._terminal_btn.pack(side="left")
 
     def _build_meta(self, parent):
         sec = ttk.LabelFrame(parent, text="Meta-Informationen", padding=10, style="Section.TLabelframe")
@@ -1209,6 +1213,20 @@ class GDWHApp(tk.Tk):
         self.log_box.delete("1.0", "end")
         self.log_box.config(state="disabled")
 
+    def _toggle_log(self):
+        if self._log_visible:
+            self._log_frame.pack_forget()
+            self._log_sep.pack_forget()
+            self._terminal_btn.config(text="Terminal ▾")
+            self._log_visible = False
+        else:
+            self._log_sep.pack(fill="x", padx=12, pady=4,
+                               before=self._btn_row)
+            self._log_frame.pack(fill="x", padx=12, pady=(0, 4),
+                                 before=self._btn_row)
+            self._terminal_btn.config(text="Terminal ▴")
+            self._log_visible = True
+
     def _poll_log(self):
         while True:
             try:
@@ -1228,8 +1246,14 @@ class GDWHApp(tk.Tk):
         self._progress_frame.pack_forget()
         if success:
             self._log("\n✓  Import erfolgreich abgeschlossen.\n")
+            if self._pending_archive:
+                p = self._pending_archive
+                self._write_archive_log(p["gds"], p["area"], p["line_id"],
+                                        auftragstyp=p["auftragstyp"])
+            self._pending_archive = None
             messagebox.showinfo("Fertig", "Import erfolgreich abgeschlossen!", parent=self)
         else:
+            self._pending_archive = None
             self._log("\n✗  Import fehlgeschlagen oder abgebrochen.\n")
         if self._log_file:
             try:
@@ -1403,9 +1427,13 @@ class GDWHApp(tk.Tk):
             self._log_file = None
             print(f"[WARNUNG] Logdatei konnte nicht erstellt werden: {e}")
 
-        # Fortlaufendes Archiv-Log erweitern: {GDS}_{AREA}_{Line_ID} = {STAC-Link}
-        self._write_archive_log(gds, area_s, line_s,
-                                auftragstyp=meta.get("Auftragstyp", ""))
+        # Archiv-Log-Parameter merken – Eintrag wird erst nach erfolgreichem Abschluss geschrieben
+        self._pending_archive = {
+            "gds":         gds,
+            "area":        area_s,
+            "line_id":     line_s,
+            "auftragstyp": meta.get("Auftragstyp", ""),
+        }
 
         self._log(f"=== GDWH Import gestartet – GDS: {gds} ===\n\n")
 
